@@ -1,0 +1,21 @@
+services:
+  jenkins:
+    build: 
+      context: .
+      dockerfile: jenkins.Dockerfile
+    container_name: jenkins
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - jenkins-docker-certs:/certs/client:ro
+    networks:
+      - jenkins
+    environment:
+      #- JENKINS_OPTS="--prefix=/jenkins"
+      #- JENKINS_SLAVE_AGENT_PORT=50000
+      - DOCKER_HOST=tcp://docker:2376
+      - DOCKER_CERT_PATH=/certs/client
+      - DOCKER_TLS_VERIFY=1
+    restart: always

@@ -1,8 +1,9 @@
 <script setup lang="ts">
     import { ref, onMounted } from 'vue';
     import { io } from 'socket.io-client';
+    import { Socket } from "socket.io-client";
     const messages = ref<string[]>([]);
-    let socket; 
+    let socket : Socket; 
     const addMessage = (message: string) => {
         console.log('Adding message:', message);
         
