@@ -1,0 +1,34 @@
+name : CI Pipline
+
+on : 
+  push
+
+jobs:
+  build:
+      name :  Building App 
+      runs-on: ubuntu-latest
+      steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+            
+            - name: Setup Node
+              uses: actions/setup-node@v4
+
+            - name: install dependecies
+              run : npm install
+
+            - name: Build
+              run : npm build
+
+  test:
+    name : testing App
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+          - name: Run tests
+            run: npx jest --coverage
+
+          - name: Upload results to Codecov
+            uses: codecov/codecov-action@v4
+            with:
+              token: ${{ secrets.CODECOV_TOKEN }}
