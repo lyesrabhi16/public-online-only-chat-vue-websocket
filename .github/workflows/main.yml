@@ -20,15 +20,11 @@ jobs:
         run: npm run build
 
   test:
-    runs-on: ubuntu-latest
     name: testing App
     needs: build
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: build
-        uses: build
 
       - name: Run tests
         run: npm run test -- --coverage
