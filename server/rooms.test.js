@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { LIMITS, RateLimiter, Registry, cleanNickname, cleanRoomName, cleanText, slugify } from "./rooms.js";
+import {
+  CODE_ALPHABET,
+  CODE_LENGTH,
+  FailureLimiter,
+  LIMITS,
+  RateLimiter,
+  Registry,
+  cleanNickname,
+  cleanRoomName,
+  cleanText,
+  generateCode,
+  normalizeCode,
+} from "./rooms.js";
 
 describe("nicknames", () => {
   it("are trimmed and have their spaces collapsed", () => {
@@ -31,15 +43,33 @@ describe("room names and messages", () => {
     expect(cleanText("z".repeat(LIMITS.textMax + 1)).error).toBeTruthy();
     expect(cleanText({ toString: () => "sneaky" }).error).toBeTruthy();
   });
+});
 
-  it("slugs drop accents and punctuation", () => {
-    expect(slugify("Café & Thé!")).toBe("cafe-the");
-    expect(slugify("日本語")).toMatch(/^[0-9a-f]{8}$/);
+describe("codes", () => {
+  it("have 6 characters, and none that is easy to mix up", () => {
+    expect(CODE_LENGTH).toBe(6);
+    for (const confusing of "0O1I") expect(CODE_ALPHABET).not.toContain(confusing);
+    for (let i = 0; i < 200; i++) expect(generateCode()).toMatch(/^[A-HJ-NP-Z2-9]{6}$/);
+  });
+
+  it("are random", () => {
+    const codes = new Set(Array.from({ length: 500 }, () => generateCode()));
+    expect(codes.size).toBeGreaterThan(495);
+  });
+
+  it("are read in any case, with or without separators", () => {
+    expect(normalizeCode("k7m2qx")).toBe("K7M2QX");
+    expect(normalizeCode("  K7M-2QX ")).toBe("K7M2QX");
+    expect(normalizeCode("k7m 2qx")).toBe("K7M2QX");
+  });
+
+  it.each([[""], ["K7M2Q"], ["K7M2QXX"], ["K7M20X"], ["K7M2QI"], ["K7M2Q!"], [123456], [null], [{ a: 1 }]])("%j is not a code", (raw) => {
+    expect(normalizeCode(raw)).toBeNull();
   });
 });
 
-describe("rate limiter", () => {
-  it("allows a burst, then refuses until the window has passed", () => {
+describe("rate limiters", () => {
+  it("a burst is allowed, then refused until the window has passed", () => {
     let now = 0;
     const limiter = new RateLimiter(3, 1000, () => now);
     expect([limiter.allow(), limiter.allow(), limiter.allow(), limiter.allow()]).toEqual([true, true, true, false]);
@@ -48,101 +78,170 @@ describe("rate limiter", () => {
     now = 1000;
     expect(limiter.allow()).toBe(true);
   });
+
+  it("an address is blocked after too many failures, for a while, and others are not", () => {
+    let now = 0;
+    const limiter = new FailureLimiter(3, 1000, () => now);
+    expect(limiter.blocked("a")).toBe(false);
+    limiter.fail("a");
+    limiter.fail("a");
+    expect(limiter.blocked("a")).toBe(false);
+    limiter.fail("a");
+    expect(limiter.blocked("a")).toBe(true);
+    expect(limiter.blocked("b")).toBe(false);
+    now = 1000;
+    expect(limiter.blocked("a")).toBe(false);
+  });
 });
 
 describe("registry", () => {
-  const fresh = () => new Registry();
+  const fresh = (generate) => new Registry(generate);
+  const person = (r, id, nickname) => r.register(id, nickname).user;
 
-  it("starts with the default rooms, empty and permanent", () => {
+  it("starts with no room at all: they cannot be browsed", () => {
     const r = fresh();
-    expect(r.list().map((x) => x.id).sort()).toEqual(["general", "random", "tech"]);
-    expect(r.list().every((x) => x.members === 0 && x.permanent)).toBe(true);
+    person(r, "a", "Ada");
+    expect(r.rooms.size).toBe(0);
+    expect(r.roomsOf("a")).toEqual([]);
   });
 
-  it("refuses a nickname that is online already, whatever the case", () => {
+  it("refuses a nickname that is online already, whatever the case, and frees it when the person leaves", () => {
     const r = fresh();
-    expect(r.register("a", "Ada").user).toBeTruthy();
+    person(r, "a", "Ada");
     expect(r.register("b", "ada").error).toMatch(/already used/);
     expect(r.register("a", "Other").error).toMatch(/already chose/);
-  });
-
-  it("frees the nickname when the person leaves", () => {
-    const r = fresh();
-    r.register("a", "Ada");
     r.unregister("a");
     expect(r.register("b", "Ada").user).toBeTruthy();
   });
 
-  it("only lets registered people join, and only rooms that exist", () => {
+  it("a room is created with a code, and its creator is inside", () => {
     const r = fresh();
-    expect(r.join("ghost", "general").error).toMatch(/nickname/);
-    r.register("a", "Ada");
-    expect(r.join("a", "nope").error).toMatch(/no longer exists/);
-    expect(r.join("a", "general").room.members).toBe(1);
-    expect(r.join("a", "general").already).toBe(true);
-    expect(r.isIn("a", "general")).toBe(true);
+    person(r, "a", "Ada");
+    const { room } = r.createRoom("a", "  Study   group ");
+    expect(room).toMatchObject({ name: "Study group", members: 1 });
+    expect(room.code).toMatch(/^[A-Z2-9]{6}$/);
+    expect(r.isIn("a", room.id)).toBe(true);
+    expect(r.roomsOf("a")).toEqual([room]);
   });
 
-  it("creates rooms, refuses duplicates and gives unique ids", () => {
+  it("needs a nickname to create or join", () => {
     const r = fresh();
-    const first = r.createRoom("Chess club").room;
-    expect(first.id).toBe("chess-club");
-    expect(r.createRoom("CHESS CLUB").error).toMatch(/already exists/);
-    expect(r.createRoom("Chess-club!").room.id).toBe("chess-club-2"); // same slug, different name
+    expect(r.createRoom("ghost", "Room").error).toMatch(/nickname/);
+    expect(r.joinWithCode("ghost", "ABCDEF").error).toMatch(/nickname/);
   });
 
-  it("removes a created room when its last member leaves, but keeps the default ones", () => {
+  it("two rooms can have the same name: their codes tell them apart", () => {
     const r = fresh();
-    r.register("a", "Ada");
-    r.register("b", "Bob");
-    const { room } = r.createRoom("Temp");
-    r.join("a", room.id);
-    r.join("b", room.id);
-    expect(r.leave("a", room.id)).toMatchObject({ left: true, removed: false });
-    expect(r.leave("b", room.id)).toMatchObject({ left: true, removed: true });
-    expect(r.rooms.has(room.id)).toBe(false);
-    r.join("a", "general");
-    r.leave("a", "general");
-    expect(r.rooms.has("general")).toBe(true);
+    person(r, "a", "Ada");
+    person(r, "b", "Bob");
+    const one = r.createRoom("a", "Study").room;
+    const two = r.createRoom("b", "Study").room;
+    expect(one.code).not.toBe(two.code);
+    expect(one.id).not.toBe(two.id);
   });
 
-  it("lists members alphabetically and by head count", () => {
-    const r = fresh();
-    r.register("a", "Zoe");
-    r.register("b", "Adam");
-    r.join("a", "tech");
-    r.join("b", "tech");
-    expect(r.members("tech").map((m) => m.nickname)).toEqual(["Adam", "Zoe"]);
-    expect(r.list()[0]).toMatchObject({ id: "tech", members: 2 });
+  it("never gives two rooms the same code, even when the generator repeats itself", () => {
+    const codes = ["AAAAAA", "AAAAAA", "AAAAAA", "BBBBBB"];
+    const r = fresh(() => codes.shift());
+    person(r, "a", "Ada");
+    person(r, "b", "Bob");
+    expect(r.createRoom("a", "One").room.code).toBe("AAAAAA");
+    expect(r.createRoom("b", "Two").room.code).toBe("BBBBBB");
   });
 
-  it("limits how many rooms one person can be in", () => {
+  it("lets somebody in with the code, however it is typed", () => {
     const r = fresh();
-    r.register("a", "Ada");
-    for (let i = 0; i < LIMITS.roomsPerUser; i++) r.join("a", r.createRoom(`Room ${i}`).room.id);
-    expect(r.join("a", "general").error).toMatch(/rooms at a time/);
+    person(r, "a", "Ada");
+    person(r, "b", "Bob");
+    const { room } = r.createRoom("a", "Study");
+    const joined = r.joinWithCode("b", ` ${room.code.slice(0, 3).toLowerCase()}-${room.code.slice(3)} `);
+    expect(joined).toMatchObject({ already: false, room: { id: room.id, members: 2 } });
+    expect(r.members(room.id).map((m) => m.nickname)).toEqual(["Ada", "Bob"]);
+    expect(r.joinWithCode("b", room.code).already).toBe(true);
   });
 
-  it("limits the number of rooms and the size of a room", () => {
+  it("refuses a code that does not exist, or is not a code, and says to count the failure", () => {
     const r = fresh();
-    for (let i = r.rooms.size; i < LIMITS.rooms; i++) expect(r.createRoom(`Room number ${i}`).room).toBeTruthy();
-    expect(r.createRoom("One too many").error).toMatch(/too many rooms/);
-    const full = fresh();
-    for (let i = 0; i < LIMITS.membersPerRoom; i++) {
-      full.register(`c${i}`, `User ${i}`);
-      full.join(`c${i}`, "general");
+    person(r, "a", "Ada");
+    expect(r.joinWithCode("a", "ZZZZZZ")).toMatchObject({ wrongCode: true, error: expect.stringMatching(/No room/) });
+    expect(r.joinWithCode("a", "nope")).toMatchObject({ wrongCode: true, error: expect.stringMatching(/not a room code/) });
+    expect(r.joinWithCode("a", { code: 1 })).toMatchObject({ wrongCode: true });
+  });
+
+  it("does not count as a wrong code when the room is full or the person is in too many", () => {
+    const r = fresh();
+    person(r, "owner", "Owner");
+    const { room } = r.createRoom("owner", "Full");
+    for (let i = 1; i < LIMITS.membersPerRoom; i++) {
+      person(r, `c${i}`, `User ${i}`);
+      expect(r.joinWithCode(`c${i}`, room.code).room).toBeTruthy();
     }
-    full.register("late", "Latecomer");
-    expect(full.join("late", "general").error).toMatch(/full/);
+    person(r, "late", "Latecomer");
+    expect(r.joinWithCode("late", room.code)).toEqual({ error: "This room is full." });
   });
 
-  it("takes a person out of every room when they disconnect", () => {
+  it("the last person to leave closes the room, and its code stops working", () => {
     const r = fresh();
-    r.register("a", "Ada");
-    r.join("a", "general");
-    r.join("a", "random");
+    person(r, "a", "Ada");
+    person(r, "b", "Bob");
+    const { room } = r.createRoom("a", "Temp");
+    r.joinWithCode("b", room.code);
+    expect(r.leave("a", room.id)).toMatchObject({ left: true, removed: false });
+    expect(r.joinWithCode("a", room.code).room).toBeTruthy(); // still open while Bob is in
+    r.leave("a", room.id);
+    expect(r.leave("b", room.id)).toMatchObject({ left: true, removed: true });
+    expect(r.rooms.size).toBe(0);
+    person(r, "c", "Cleo");
+    expect(r.joinWithCode("c", room.code).error).toMatch(/No room/);
+  });
+
+  it("a disconnection takes a person out of every room", () => {
+    const r = fresh();
+    person(r, "a", "Ada");
+    person(r, "b", "Bob");
+    const one = r.createRoom("a", "One").room;
+    r.createRoom("a", "Two");
+    r.joinWithCode("b", one.code);
     const { left } = r.unregister("a");
-    expect(left.map((l) => l.roomId).sort()).toEqual(["general", "random"]);
-    expect(r.members("general")).toEqual([]);
+    expect(left).toHaveLength(2);
+    expect(r.roomsOf("b").map((x) => x.id)).toEqual([one.id]);
+    expect(r.members(one.id).map((m) => m.nickname)).toEqual(["Bob"]);
+  });
+
+  it("a room somebody was alone in stays open after a disconnection, for a moment, so a blip does not lose it", () => {
+    const r = fresh();
+    person(r, "a", "Ada");
+    const { room } = r.createRoom("a", "Blip");
+    expect(r.unregister("a").left[0]).toMatchObject({ removed: false, emptied: true });
+    person(r, "a2", "Ada");
+    expect(r.joinWithCode("a2", room.code).room).toMatchObject({ id: room.id, members: 1 }); // back with the same code
+    expect(r.closeIfEmpty(room.id)).toBe(false); // somebody is in it again
+  });
+
+  it("an empty room is closed once the grace period is over, and leaving on purpose closes it at once", () => {
+    const r = fresh();
+    person(r, "a", "Ada");
+    const blip = r.createRoom("a", "Blip").room;
+    const onPurpose = r.createRoom("a", "Purpose").room;
+    expect(r.leave("a", onPurpose.id).removed).toBe(true);
+    r.unregister("a");
+    expect(r.closeIfEmpty(blip.id)).toBe(true);
+    expect(r.rooms.size).toBe(0);
+    person(r, "b", "Bob");
+    expect(r.joinWithCode("b", blip.code).error).toMatch(/No room/);
+  });
+
+  it("limits how many rooms one person is in, and how many rooms exist", () => {
+    const r = fresh();
+    person(r, "a", "Ada");
+    for (let i = 0; i < LIMITS.roomsPerUser; i++) expect(r.createRoom("a", `Room ${i}`).room).toBeTruthy();
+    expect(r.createRoom("a", "One more").error).toMatch(/rooms at a time/);
+    const crowded = fresh();
+    for (let i = 0; i < LIMITS.rooms; i++) {
+      person(crowded, `u${i}`, `User ${i}`);
+      expect(crowded.createRoom(`u${i}`, "Room").room).toBeTruthy();
+    }
+    person(crowded, "extra", "Extra");
+    expect(crowded.createRoom("extra", "Too many").error).toMatch(/too many rooms/);
   });
 });

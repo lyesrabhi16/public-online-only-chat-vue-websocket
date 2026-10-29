@@ -1,11 +1,13 @@
-// The Socket.IO server. It relays messages between the people in a room and keeps no history at all:
+// The Socket.IO server. A room is entered with its code. It relays messages between the people in a room and keeps no history at all:
 // a person who joins late (or reconnects) sees nothing of what was said before.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { Server } from "socket.io";
-import { Registry, RateLimiter, cleanText } from "./rooms.js";
+import { FailureLimiter, Registry, RateLimiter, cleanText } from "./rooms.js";
+
+const GRACE_MS = 60_000; // how long a room stays open after its last person was disconnected
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -47,6 +49,7 @@ function requestListener(registry, staticDir) {
 /** `corsOrigin`: "*" or a comma-separated list of the web pages allowed to connect (the Vite dev server by default). */
 export function createChatServer({ corsOrigin = "http://localhost:5173,http://127.0.0.1:5173", staticDir } = {}) {
   const registry = new Registry();
+  const wrongCodes = new FailureLimiter(); // by address: stops anybody from trying codes one after the other
   const server = http.createServer(requestListener(registry, staticDir));
   const origins = corsOrigin === "*" ? "*" : corsOrigin.split(",").map((o) => o.trim());
   // a chat message is tiny: refusing big payloads stops anyone from flooding the server with them
@@ -55,7 +58,6 @@ export function createChatServer({ corsOrigin = "http://localhost:5173,http://12
   const reply = (ack, body) => typeof ack === "function" && ack(body);
   const payload = (raw) => (raw !== null && typeof raw === "object" ? raw : {});
 
-  const announceRooms = () => io.to("lobby").emit("rooms", registry.list());
   const announceMembers = (roomId) => io.to(key(roomId)).emit("room:members", { room: roomId, members: registry.members(roomId) });
   const announceEvent = (roomId, kind, nickname) =>
     io.to(key(roomId)).emit("room:event", { room: roomId, kind, nickname, at: new Date().toISOString() });
@@ -72,43 +74,36 @@ export function createChatServer({ corsOrigin = "http://localhost:5173,http://12
         announceEvent(roomId, "leave", result.nickname);
         announceMembers(roomId);
       }
-      announceRooms();
       return true;
     };
 
     socket.on("hello", (data, ack) => {
       const { user, error } = registry.register(socket.id, payload(data).nickname);
       if (error) return reply(ack, { error });
-      socket.join("lobby");
-      reply(ack, { ok: true, user: { id: user.id, nickname: user.nickname }, rooms: registry.list() });
-      announceRooms();
+      reply(ack, { ok: true, user: { id: user.id, nickname: user.nickname } });
     });
 
-    socket.on("rooms:list", (_data, ack) => {
-      if (!registry.user(socket.id)) return reply(ack, { error: "Choose a nickname first." });
-      reply(ack, { ok: true, rooms: registry.list() });
-    });
-
+    // A new room: its creator is inside it and gets its code, to share with whoever should come in.
     socket.on("room:create", (data, ack) => {
-      if (!registry.user(socket.id)) return reply(ack, { error: "Choose a nickname first." });
-      const { room, error } = registry.createRoom(payload(data).name);
+      const { room, error } = registry.createRoom(socket.id, payload(data).name);
       if (error) return reply(ack, { error });
-      // if nobody ever joins it, the room is cleaned up again
-      setTimeout(() => registry.removeIfAbandoned(room.id) && announceRooms(), 60_000).unref();
-      reply(ack, { ok: true, room });
-      announceRooms();
+      socket.join(key(room.id));
+      reply(ack, { ok: true, room, members: registry.members(room.id) });
     });
 
+    // The only way into a room: its code.
     socket.on("room:join", (data, ack) => {
-      const roomId = String(payload(data).room);
-      const { room, error, already } = registry.join(socket.id, roomId);
+      if (!registry.user(socket.id)) return reply(ack, { error: "Choose a nickname first." });
+      const address = socket.handshake.address;
+      if (wrongCodes.blocked(address)) return reply(ack, { error: "Too many wrong codes. Wait a few minutes before trying again." });
+      const { room, error, already, wrongCode } = registry.joinWithCode(socket.id, payload(data).code);
+      if (wrongCode) wrongCodes.fail(address);
       if (error) return reply(ack, { error });
       socket.join(key(room.id));
       reply(ack, { ok: true, room, members: registry.members(room.id) });
       if (!already) {
         announceEvent(room.id, "join", registry.user(socket.id).nickname);
         announceMembers(room.id);
-        announceRooms();
       }
     });
 
@@ -146,12 +141,14 @@ export function createChatServer({ corsOrigin = "http://localhost:5173,http://12
       const { user, left } = registry.unregister(socket.id);
       if (!user) return;
       for (const r of left) {
-        if (!r.removed) {
+        if (!r.emptied) {
           announceEvent(r.roomId, "leave", user.nickname);
           announceMembers(r.roomId);
+        } else {
+          // alone in it and gone: the room (and its code) stays open for a minute, in case it was only the connection
+          setTimeout(() => registry.closeIfEmpty(r.roomId), GRACE_MS).unref();
         }
       }
-      announceRooms();
     });
   });
 
