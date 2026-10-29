@@ -1,30 +1,12 @@
-import { Server } from "socket.io";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createChatServer } from "./server/index.js";
 
-const io = new Server(3000, {
-  cors: {
-    origin: "*",
-  },
+const port = Number(process.env.PORT || 3000);
+const chat = createChatServer({
+  corsOrigin: process.env.CORS_ORIGIN,
+  // when the client has been built (npm run build) the same server serves it: one address for everything
+  staticDir: path.join(path.dirname(fileURLToPath(import.meta.url)), "dist"),
 });
 
-const clients = new Set();
-
-io.on("connection", (socket) => {
-  clients.add(socket);
-  console.log("New client connected");
-  socket.emit("message", "Hello! Message from Server!!");
-
-  socket.on("message", (message) => {
-    console.log("Message from client ==>", message);
-    clients.forEach((client) => {
-      client.emit("message", message);
-      if (client === socket) {
-        client.emit("message-sent", message);
-      }
-    });
-  });
-
-  socket.on("disconnect", () => {
-    console.log("Client disconnected");
-    clients.delete(socket);
-  });
-});
+chat.listen(port).then((p) => console.log(`Chat server listening on http://localhost:${p}`));
