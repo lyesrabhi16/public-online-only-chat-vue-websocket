@@ -38,7 +38,7 @@ const choose = (next: 'join' | 'create') => {
     </header>
 
     <div class="actions">
-      <button type="button" class="primary" :aria-pressed="mode === 'join'" @click="choose('join')">Join with a code</button>
+      <button type="button" class="primary" :aria-pressed="mode === 'join'" @click="choose('join')">Enter code</button>
       <button type="button" class="secondary" :aria-pressed="mode === 'create'" @click="choose('create')">+ New room</button>
     </div>
 

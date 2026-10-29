@@ -443,6 +443,17 @@ button:focus-visible {
   .back {
     display: block;
   }
+
+  /* the code gets its own row under the title instead of squeezing it */
+  .panel > header {
+    flex-wrap: wrap;
+  }
+
+  .code-chip {
+    order: 3;
+    flex: 1 1 100%;
+    justify-content: center;
+  }
 }
 
 /* ---- joining with a code ---- */
