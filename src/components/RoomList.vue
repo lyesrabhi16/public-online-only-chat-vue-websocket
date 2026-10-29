@@ -1,18 +1,29 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import type { Room } from '../types'
 import { colorFor, peopleLabel } from '../utils'
 
-defineProps<{ rooms: Room[]; active: string | null; joined: string[]; nickname: string; error?: string }>()
-const emit = defineEmits<{ open: [id: string]; create: [name: string]; logout: [] }>()
+export interface RoomItem {
+  id: string
+  name: string
+  people: number
+}
 
-const creating = ref(false)
-const name = ref('')
+defineProps<{ rooms: RoomItem[]; active: string | null; nickname: string; error?: string }>()
+const emit = defineEmits<{ open: [id: string]; create: [name: string]; join: [code: string]; logout: [] }>()
 
-const create = () => {
-  emit('create', name.value)
-  name.value = ''
-  creating.value = false
+const mode = ref<'' | 'join' | 'create'>('')
+const text = ref('')
+
+const submit = () => {
+  if (mode.value === 'join') emit('join', text.value)
+  else emit('create', text.value)
+  text.value = ''
+  mode.value = ''
+}
+
+const choose = (next: 'join' | 'create') => {
+  mode.value = mode.value === next ? '' : next
+  text.value = ''
 }
 </script>
 
@@ -26,28 +37,41 @@ const create = () => {
       <button class="link" type="button" @click="emit('logout')">Leave chat</button>
     </header>
 
-    <h2>Public rooms</h2>
-    <ul>
+    <div class="actions">
+      <button type="button" class="primary" :aria-pressed="mode === 'join'" @click="choose('join')">Join with a code</button>
+      <button type="button" class="secondary" :aria-pressed="mode === 'create'" @click="choose('create')">+ New room</button>
+    </div>
+
+    <form v-if="mode" class="enter" @submit.prevent="submit">
+      <input
+        v-model="text"
+        type="text"
+        :maxlength="mode === 'join' ? 12 : 30"
+        :class="{ code: mode === 'join' }"
+        :placeholder="mode === 'join' ? 'Code, for example K7M 2QX' : 'Name of the room'"
+        :aria-label="mode === 'join' ? 'Room code' : 'Room name'"
+        autocomplete="off"
+        autofocus
+      />
+      <button type="submit" class="primary" :disabled="!text.trim()">{{ mode === 'join' ? 'Join' : 'Create' }}</button>
+    </form>
+
+    <p v-if="error" class="error" role="alert">{{ error }}</p>
+
+    <h2>Your rooms</h2>
+    <ul v-if="rooms.length">
       <li v-for="room in rooms" :key="room.id">
         <button type="button" class="room" :class="{ active: room.id === active }" @click="emit('open', room.id)">
           <span class="avatar" :style="{ background: colorFor(room.name) }">#</span>
           <span class="room-text">
             <strong>{{ room.name }}</strong>
-            <small>{{ peopleLabel(room.members) }}</small>
+            <small>{{ peopleLabel(room.people) }}</small>
           </span>
-          <span v-if="joined.includes(room.id)" class="badge" title="You are in this room">in</span>
         </button>
       </li>
     </ul>
+    <p v-else class="none">You are not in any room yet.</p>
 
-    <form v-if="creating" class="create" @submit.prevent="create">
-      <input v-model="name" type="text" maxlength="30" placeholder="Room name" aria-label="Room name" autofocus />
-      <button type="submit" class="primary">Create</button>
-      <button type="button" class="link" @click="creating = false">Cancel</button>
-    </form>
-    <button v-else type="button" class="new-room" @click="creating = true">+ New room</button>
-
-    <p v-if="error" class="error" role="alert">{{ error }}</p>
-    <p class="live-note">Rooms made by people disappear when the last person leaves.</p>
+    <p class="live-note">Rooms cannot be browsed: you need their code. A room closes when everybody has left it.</p>
   </aside>
 </template>

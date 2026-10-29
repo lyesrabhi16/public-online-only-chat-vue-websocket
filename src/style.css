@@ -444,3 +444,65 @@ button:focus-visible {
     display: block;
   }
 }
+
+/* ---- joining with a code ---- */
+.actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.secondary {
+  padding: 0.7rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: none;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.actions button[aria-pressed='true'] {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.enter {
+  display: grid;
+  gap: 0.5rem;
+}
+
+input.code {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.none {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.code-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px dashed var(--accent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 0.85rem;
+}
+
+.code-chip strong {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  letter-spacing: 0.1em;
+}
+
+.code-label {
+  color: var(--muted);
+}
+
+.code-chip .copy {
+  color: var(--accent);
+  font-weight: 600;
+}

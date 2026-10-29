@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { Line } from '../types'
 import ChatPanel from './ChatPanel.vue'
 
@@ -13,7 +13,7 @@ const members = [
   { id: 'a', nickname: 'Ada' },
   { id: 'b', nickname: 'Bob' },
 ]
-const make = (props = {}) => mount(ChatPanel, { props: { roomName: 'General', lines, members, typing: [], ...props } })
+const make = (props = {}) => mount(ChatPanel, { props: { roomName: 'General', code: 'K7M2QX', lines, members, typing: [], ...props } })
 
 describe('ChatPanel', () => {
   it('shows the room, the head count, events and messages', () => {
@@ -74,6 +74,19 @@ describe('ChatPanel', () => {
     await wrapper.find('input').setValue('')
     await wrapper.find('input').trigger('input')
     expect(wrapper.emitted('typing')?.at(-1)).toEqual([false])
+  })
+
+  it('shows the code of the room, to share it', () => {
+    expect(make().find('.code-chip').text()).toContain('K7M 2QX')
+  })
+
+  it('copies the code without the space', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
+    const wrapper = make()
+    await wrapper.find('.code-chip').trigger('click')
+    await vi.waitFor(() => expect(wrapper.find('.code-chip .copy').text()).toBe('Copied'))
+    expect(writeText).toHaveBeenCalledWith('K7M2QX')
   })
 
   it('lets you leave the room and go back to the list', async () => {

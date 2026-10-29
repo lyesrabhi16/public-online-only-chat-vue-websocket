@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue'
 import type { Line, Member } from '../types'
-import { colorFor, formatTime, peopleLabel, typingLabel } from '../utils'
+import { colorFor, copyText, formatTime, groupCode, peopleLabel, typingLabel } from '../utils'
 
-const props = defineProps<{ roomName: string; lines: Line[]; members: Member[]; typing: string[]; error?: string }>()
+const props = defineProps<{ roomName: string; code: string; lines: Line[]; members: Member[]; typing: string[]; error?: string }>()
 const emit = defineEmits<{ send: [text: string]; typing: [on: boolean]; leave: []; back: [] }>()
 
 const text = ref('')
 const showMembers = ref(false)
+const copied = ref(false)
 const list = ref<HTMLElement | null>(null)
 let typingTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -24,6 +25,11 @@ watch(
   },
   { flush: 'post' },
 )
+
+const copyCode = async () => {
+  copied.value = await copyText(props.code)
+  setTimeout(() => (copied.value = false), 1500)
+}
 
 const submit = () => {
   const value = text.value.trim()
@@ -49,6 +55,11 @@ const onInput = () => {
         <h2>{{ roomName }}</h2>
         <button type="button" class="link" @click="showMembers = !showMembers">{{ peopleLabel(members.length) }}</button>
       </div>
+      <button type="button" class="code-chip" :title="'Share this code to let people in'" @click="copyCode">
+        <span class="code-label">Code</span>
+        <strong>{{ groupCode(code) }}</strong>
+        <span class="copy">{{ copied ? 'Copied' : 'Copy' }}</span>
+      </button>
       <button type="button" class="link" @click="emit('leave')">Leave room</button>
     </header>
 

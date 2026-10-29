@@ -20,7 +20,6 @@ export function createChat(url?: string, connect: typeof io = io) {
   const state = reactive({
     status: 'offline' as Status,
     me: null as Member | null,
-    rooms: [] as Room[],
     joined: {} as Record<string, JoinedRoom>,
     active: null as string | null,
     error: '',
@@ -55,9 +54,6 @@ export function createChat(url?: string, connect: typeof io = io) {
     })
     s.on('connect_error', () => {
       state.status = 'offline'
-    })
-    s.on('rooms', (rooms: Room[]) => {
-      state.rooms = rooms
     })
     s.on('message', (m: ServerMessage) => {
       addLine(m.room, { kind: 'message', id: m.id, from: m.from, text: m.text, at: m.at, mine: m.from.nickname === state.me?.nickname })
@@ -114,7 +110,6 @@ export function createChat(url?: string, connect: typeof io = io) {
     const answer = await ask('hello', { nickname })
     if (answer.error) return answer.error
     state.me = answer.user as Member
-    state.rooms = answer.rooms as Room[]
     state.status = 'online'
     return ''
   }
@@ -125,15 +120,16 @@ export function createChat(url?: string, connect: typeof io = io) {
       const answer = await ask('hello', { nickname })
       if (answer.ok) {
         state.me = answer.user as Member
-        state.rooms = answer.rooms as Room[]
         state.status = 'online'
         for (const id of Object.keys(state.joined)) {
-          const rejoined = await ask('room:join', { room: id })
           const joined = state.joined[id]
-          if (rejoined.ok && joined) {
+          const rejoined = await ask('room:join', { code: joined.room.code })
+          if (rejoined.ok) {
+            joined.room = rejoined.room as Room
             joined.members = rejoined.members as Member[]
             joined.lines.push(eventLine('You are back. Anything said while you were away is gone.'))
           } else {
+            // the room closed while we were away
             delete state.joined[id]
             if (state.active === id) state.active = Object.keys(state.joined)[0] ?? null
           }
@@ -148,24 +144,27 @@ export function createChat(url?: string, connect: typeof io = io) {
     state.error = 'You were disconnected and your nickname was taken. Choose another one.'
   }
 
-  async function open(roomId: string) {
-    state.error = ''
-    if (state.joined[roomId]) {
-      state.active = roomId
-      return
+  /** Shows a room we are already in. */
+  function open(roomId: string) {
+    if (state.joined[roomId]) state.active = roomId
+  }
+
+  function enter(room: Room, members: Member[], first: string) {
+    const existing = state.joined[room.id]
+    if (existing) {
+      existing.members = members
+    } else {
+      state.joined[room.id] = { room, lines: [eventLine(first)], members, typing: [] }
     }
-    const answer = await ask('room:join', { room: roomId })
-    if (answer.error) {
-      state.error = answer.error
-      return
-    }
-    state.joined[roomId] = {
-      room: answer.room as Room,
-      lines: [eventLine('You joined. Messages in this room are live only: nobody can see what was said before you came.')],
-      members: answer.members as Member[],
-      typing: [],
-    }
-    state.active = roomId
+    state.active = room.id
+  }
+
+  /** The only way into a room: its code. Resolves with an error message, or '' when it worked. */
+  async function join(code: string): Promise<string> {
+    const answer = await ask('room:join', { code })
+    if (answer.error) return answer.error
+    enter(answer.room as Room, answer.members as Member[], 'You joined. Messages in this room are live only: nobody can see what was said before you came.')
+    return ''
   }
 
   async function leave(roomId: string) {
@@ -174,10 +173,11 @@ export function createChat(url?: string, connect: typeof io = io) {
     if (state.active === roomId) state.active = null
   }
 
+  /** A new room: we are in it, and its code is for sharing. */
   async function create(name: string): Promise<string> {
     const answer = await ask('room:create', { name })
     if (answer.error) return answer.error
-    await open((answer.room as Room).id)
+    enter(answer.room as Room, answer.members as Member[], 'Room created. Share its code to let people in. The room closes when everybody has left it.')
     return ''
   }
 
@@ -195,13 +195,12 @@ export function createChat(url?: string, connect: typeof io = io) {
     socket?.close()
     socket = null
     state.me = null
-    state.rooms = []
     state.joined = {}
     state.active = null
     state.status = 'offline'
   }
 
-  return { state, login, open, leave, create, send, typing, logout }
+  return { state, login, open, join, leave, create, send, typing, logout }
 }
 
 export type Chat = ReturnType<typeof createChat>

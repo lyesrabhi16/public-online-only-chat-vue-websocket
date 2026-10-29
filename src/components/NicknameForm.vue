@@ -13,9 +13,9 @@ const submit = () => {
 <template>
   <main class="welcome">
     <form class="card" @submit.prevent="submit">
-      <h1>Public chat rooms</h1>
+      <h1>Chat rooms with a code</h1>
       <p class="lead">
-        Open rooms for everyone. Pick a nickname and join the conversation.
+        Pick a nickname, then create a room and share its code, or join one with the code you were given.
       </p>
       <p class="live-note">
         Live only: nothing is saved. You only see what is said while you are in a room.

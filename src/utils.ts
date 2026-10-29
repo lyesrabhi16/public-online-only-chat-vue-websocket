@@ -22,3 +22,30 @@ export function typingLabel(names: string[]): string {
   if (names.length === 2) return `${names[0]} and ${names[1]} are typing…`
   return 'Several people are typing…'
 }
+
+/** "K7M2QX" is easier to read and to dictate as "K7M 2QX". */
+export function groupCode(code: string): string {
+  return code.length === 6 ? `${code.slice(0, 3)} ${code.slice(3)}` : code
+}
+
+/** Copies text to the clipboard. Falls back to a temporary text field where the clipboard API is not available (a page served over plain http). */
+export async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    /* fall through to the old way */
+  }
+  const field = document.createElement('textarea')
+  field.value = text
+  field.setAttribute('readonly', '')
+  field.style.position = 'fixed'
+  field.style.opacity = '0'
+  document.body.appendChild(field)
+  field.select()
+  const copied = document.execCommand('copy')
+  field.remove()
+  return copied
+}

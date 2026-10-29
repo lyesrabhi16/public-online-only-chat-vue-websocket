@@ -1,8 +1,8 @@
+/** A room you are in. Its code is what lets somebody else in. */
 export interface Room {
   id: string
   name: string
-  members: number
-  permanent: boolean
+  code: string
 }
 
 export interface Member {

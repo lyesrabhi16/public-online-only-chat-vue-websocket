@@ -12,6 +12,9 @@ const loginError = ref('')
 const sendError = ref('')
 
 const current = computed(() => (state.active ? state.joined[state.active] : undefined))
+const rooms = computed(() =>
+  Object.values(state.joined).map((j) => ({ id: j.room.id, name: j.room.name, people: j.members.length })),
+)
 
 async function enter(nickname: string) {
   busy.value = true
@@ -26,6 +29,10 @@ async function send(text: string) {
 async function create(name: string) {
   state.error = await chat.create(name)
 }
+
+async function join(code: string) {
+  state.error = await chat.join(code)
+}
 </script>
 
 <template>
@@ -34,18 +41,19 @@ async function create(name: string) {
   <div v-else class="app" :class="{ 'in-room': current }">
     <p v-if="state.status !== 'online'" class="banner" role="status">Connection lost. Trying to reconnect…</p>
     <RoomList
-      :rooms="state.rooms"
+      :rooms="rooms"
       :active="state.active"
-      :joined="Object.keys(state.joined)"
       :nickname="state.me.nickname"
       :error="state.error"
       @open="chat.open"
       @create="create"
+      @join="join"
       @logout="chat.logout"
     />
     <ChatPanel
       v-if="current"
       :room-name="current.room.name"
+      :code="current.room.code"
       :lines="current.lines"
       :members="current.members"
       :typing="current.typing"
@@ -56,8 +64,8 @@ async function create(name: string) {
       @back="state.active = null"
     />
     <section v-else class="empty">
-      <h2>Pick a room</h2>
-      <p>Choose a public room on the left, or create your own.</p>
+      <h2>No room open</h2>
+      <p>Create a room and share its code, or join one with the code you were given.</p>
       <p class="live-note">Live only: leaving a room forgets everything said in it.</p>
     </section>
   </div>

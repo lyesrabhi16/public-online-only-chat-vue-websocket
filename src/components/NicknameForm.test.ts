@@ -25,5 +25,6 @@ describe('NicknameForm', () => {
 
   it('says that nothing is saved', () => {
     expect(mount(NicknameForm).text()).toContain('nothing is saved')
+    expect(mount(NicknameForm).text()).toContain('code')
   })
 })

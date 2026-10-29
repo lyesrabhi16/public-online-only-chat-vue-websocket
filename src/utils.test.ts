@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { colorFor, formatTime, peopleLabel, typingLabel } from './utils'
+import { colorFor, formatTime, groupCode, peopleLabel, typingLabel } from './utils'
 
 describe('colorFor', () => {
   it('gives the same colour to the same name, whatever the case', () => {
@@ -38,5 +38,15 @@ describe('labels', () => {
     expect(typingLabel(['Ada'])).toBe('Ada is typing…')
     expect(typingLabel(['Ada', 'Bob'])).toBe('Ada and Bob are typing…')
     expect(typingLabel(['Ada', 'Bob', 'Eve'])).toBe('Several people are typing…')
+  })
+})
+
+describe('groupCode', () => {
+  it('splits a code in two to be read aloud', () => {
+    expect(groupCode('K7M2QX')).toBe('K7M 2QX')
+  })
+
+  it('leaves anything else alone', () => {
+    expect(groupCode('abc')).toBe('abc')
   })
 })
