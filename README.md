@@ -1,5 +1,30 @@
-# Vue 3 + TypeScript + Vite
+# Real-time Chat (Vue 3 + Socket.IO)
 
-This template should help get you started developing with Vue 3 and TypeScript in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+A minimal real-time chat: every message sent by a client is broadcast to all connected clients over WebSockets. Also serves as a CI/CD playground (GitHub Actions and a Jenkins image with Docker).
 
-Learn more about the recommended Project Setup and IDE Support in the [Vue Docs TypeScript Guide](https://vuejs.org/guide/typescript/overview.html#project-setup).
+## Tech stack
+
+Vue 3 (`<script setup>`), TypeScript, Vite, Socket.IO, Jest, GitHub Actions, Docker (Jenkins).
+
+## Getting started
+
+```bash
+npm install
+npm run dev-server   # Socket.IO server on port 3000
+npm run dev          # Vite dev server (http://localhost:5173)
+```
+
+Open the app in two browser tabs and send a message from one of them.
+
+## Scripts
+
+| Script | Description |
+| --- | --- |
+| `npm run dev` | Start the Vite dev server |
+| `npm run dev-server` | Start the Socket.IO server with nodemon |
+| `npm run build` | Type-check and build |
+| `npm run test` | Run Jest |
+
+## CI
+
+`.github/workflows/main.yml` builds the app, runs the tests with coverage and uploads the results to Codecov (requires a `CODECOV_TOKEN` repository secret). `docker-compose.yaml` starts a local Jenkins instance built from `jenkins.Dockerfile`.
