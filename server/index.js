@@ -53,6 +53,8 @@ function requestListener(health, staticDir) {
 
 /**
  * `corsOrigin`: "*" or a comma-separated list of the web pages allowed to connect (the Vite dev server by default).
+ * `trustProxy`: read the visitor's address from X-Forwarded-For, for a server behind a proxy that sets that header itself (see deploy/nginx.conf).
+ * Never turn it on for a server that people reach directly: they could write any address they like.
  * `registry` and `wrongCodes` can be replaced by the Redis versions, and `attach(io)` adds the Socket.IO Redis adapter, so that several servers share the chat.
  */
 export function createChatServer({
@@ -63,6 +65,7 @@ export function createChatServer({
   proofs = createProofs(),
   attach,
   instanceId = crypto.randomUUID().slice(0, 8),
+  trustProxy = false,
 } = {}) {
   const server = http.createServer(requestListener(async () => ({ status: "ok", instance: instanceId, ...(await registry.stats()) }), staticDir));
   const origins = corsOrigin === "*" ? "*" : corsOrigin.split(",").map((o) => o.trim());
@@ -140,7 +143,7 @@ export function createChatServer({
     // The only way into a room: its code.
     socket.on("room:join", async (data, ack) => {
       if (!(await registry.user(socket.id))) return refuse(ack, refusal("nickname_required", "Choose a nickname first."));
-      const address = socket.handshake.address;
+      const address = (trustProxy && String(socket.handshake.headers["x-forwarded-for"] ?? "").split(",")[0].trim()) || socket.handshake.address;
       if (await wrongCodes.blocked(address)) return refuse(ack, refusal("too_many_wrong_codes", "Too many wrong codes. Wait a few minutes before trying again."));
       const { room, error, code, params, already, wrongCode } = await registry.joinWithCode(socket.id, payload(data).code);
       if (wrongCode) await wrongCodes.fail(address);
@@ -150,7 +153,7 @@ export function createChatServer({
       if (!already) {
         announceEvent(room.id, "join", (await registry.user(socket.id)).nickname);
         await announceMembers(room.id);
-        announceRoom(room); // the head count, and who runs the room if it was empty
+        announceRoom(await registry.roomSummary(room.id)); // what the room is now (the head count, who runs it), not what it was a moment ago
       }
     });
 

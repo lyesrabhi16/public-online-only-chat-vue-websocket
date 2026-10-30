@@ -233,6 +233,22 @@ export function registryContract(label, make) {
       expect((await r.kick("a", room.id, "zzz")).code).toBe("unknown_target");
     });
 
+    test("every change of the room raises its revision, so that a late description can be recognised as old", async (r) => {
+      const room = await club(r);
+      const seen = [room.rev];
+      const note = async (result) => seen.push((result.room ?? (await r.roomSummary(room.id))).rev);
+      await note(await r.setLocked("a", room.id, true));
+      await note(await r.newCode("a", room.id));
+      await note(await r.setLocked("a", room.id, false)); // open again, so that somebody can come in
+      await r.register("d", "Dina");
+      const joined = await r.joinWithCode("d", (await r.roomSummary(room.id)).code);
+      expect(joined.room).toBeTruthy();
+      await note(joined);
+      await r.leave("d", room.id);
+      await note({});
+      expect(seen.every((v, i) => i === 0 || v > seen[i - 1]), JSON.stringify(seen)).toBe(true);
+    });
+
     test("a new code replaces the old one", async (r) => {
       const room = await club(r);
       const { room: changed } = await r.newCode("a", room.id);

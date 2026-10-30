@@ -8,6 +8,8 @@ export interface Room {
   members: number
   locked: boolean
   ownerId: string | null
+  /** goes up with every change of the room: of two descriptions, the one with the higher number is the newer */
+  rev: number
 }
 
 export interface Member {

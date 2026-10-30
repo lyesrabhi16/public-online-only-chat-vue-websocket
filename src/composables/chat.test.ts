@@ -361,3 +361,64 @@ describe('the connection', () => {
     await arrived(bob, room.id, 'I am back')
   })
 })
+
+/** A socket that only does what a test tells it to: events arrive when the test says so. */
+class ControlledSocket {
+  connected = true
+  private handlers = new Map<string, ((...args: unknown[]) => void)[]>()
+  on(event: string, fn: (...args: unknown[]) => void) {
+    this.handlers.set(event, [...(this.handlers.get(event) ?? []), fn])
+    return this
+  }
+  once(event: string, fn: (...args: unknown[]) => void) {
+    return this.on(event, fn)
+  }
+  emit() {}
+  close() {}
+  timeout() {
+    return { emit: (event: string, _data: unknown, ack: (err: Error | null, answer: unknown) => void) => ack(null, this.answers[event]) }
+  }
+  answers: Record<string, unknown> = {}
+  arrives(event: string, payload: unknown) {
+    for (const fn of this.handlers.get(event) ?? []) fn(payload)
+  }
+}
+
+describe('a description of the room that arrives late', () => {
+  const room = { id: 'r1', name: 'Study', code: 'K7M2QX', members: 2, locked: false, ownerId: 'a', rev: 5 }
+
+  async function inRoom() {
+    const socket = new ControlledSocket()
+    socket.answers = {
+      hello: { ok: true, user: { id: 'me', nickname: 'Me' } },
+      'room:join': { ok: true, room: { ...room }, members: [{ id: 'a', nickname: 'Ada', owner: true }, { id: 'me', nickname: 'Me' }] },
+    }
+    const chat = createChat('http://nowhere', (() => socket) as never)
+    expect(await chat.login('Me')).toBe('')
+    expect(await chat.join('K7M2QX')).toBe('')
+    return { chat, socket }
+  }
+
+  it('does not undo a newer one: the room stays locked', async () => {
+    const { chat, socket } = await inRoom()
+    socket.arrives('room:updated', { room: { ...room, locked: true, rev: 7 } }) // the owner locked the room
+    socket.arrives('room:updated', { room: { ...room, locked: false, rev: 6 } }) // the announcement of somebody joining, a moment older
+    expect(chat.state.joined.r1.room).toMatchObject({ locked: true, rev: 7 })
+    expect(chat.state.joined.r1.lines.filter((l) => l.kind === 'event' && l.key === 'event.unlocked')).toHaveLength(0)
+  })
+
+  it('does not bring back an old code either', async () => {
+    const { chat, socket } = await inRoom()
+    socket.arrives('room:updated', { room: { ...room, code: 'NEWCOD', rev: 8 } })
+    socket.arrives('room:updated', { room: { ...room, rev: 6 } })
+    expect(chat.state.joined.r1.room.code).toBe('NEWCOD')
+  })
+
+  it('still applies updates that are newer, or the same', async () => {
+    const { chat, socket } = await inRoom()
+    socket.arrives('room:updated', { room: { ...room, locked: true, rev: 6 } })
+    expect(chat.state.joined.r1.room.locked).toBe(true)
+    socket.arrives('room:updated', { room: { ...room, locked: true, members: 3, rev: 6 } }) // same revision: the same room, taken in
+    expect(chat.state.joined.r1.room.members).toBe(3)
+  })
+})

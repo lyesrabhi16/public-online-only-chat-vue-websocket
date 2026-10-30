@@ -194,7 +194,8 @@ export class Registry {
 
   // ---- rooms
   summary(room) {
-    return { id: room.id, name: room.name, code: room.code, members: room.members.size, locked: room.locked, ownerId: room.ownerId };
+    // `rev` goes up with every change of the room: whoever receives two descriptions of it keeps the one with the higher number
+    return { id: room.id, name: room.name, code: room.code, members: room.members.size, locked: room.locked, ownerId: room.ownerId, rev: room.rev };
   }
 
   /** One room as it is now, or null when it is gone. */
@@ -254,6 +255,7 @@ export class Registry {
       members: new Set([connectionId]),
       ownerId: connectionId,
       locked: false,
+      rev: 1,
       known: new Set([user.nickname.toLowerCase()]),
       banned: new Set(),
     };
@@ -281,6 +283,7 @@ export class Registry {
     room.known.add(nick);
     if (!room.ownerId || !this.users.has(room.ownerId)) room.ownerId = connectionId; // an empty room the owner left: whoever comes back runs it
     user.rooms.add(room.id);
+    room.rev++;
     return { room: this.summary(room), already: false };
   }
 
@@ -290,6 +293,7 @@ export class Registry {
     const room = this.rooms.get(String(roomId));
     if (!user || !room || !room.members.delete(connectionId)) return { left: false };
     user.rooms.delete(room.id);
+    room.rev++;
     const emptied = room.members.size === 0;
     const removed = emptied && !keepOpen;
     let newOwner = null;
@@ -324,6 +328,7 @@ export class Registry {
     const { room, error, code, params } = this.#owned(connectionId, roomId);
     if (error) return { error, code, params };
     room.locked = locked === true;
+    room.rev++;
     return { room: this.summary(room) };
   }
 
@@ -350,6 +355,7 @@ export class Registry {
     }
     this.byCode.delete(room.code);
     room.code = code;
+    room.rev++;
     this.byCode.set(code, room.id);
     return { room: this.summary(room) };
   }

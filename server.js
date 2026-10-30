@@ -9,7 +9,7 @@ const staticDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "dist"
 
 // Alone, the server keeps everything in its own memory. With REDIS_URL, any number of servers can share the chat behind a load balancer.
 let backend = null;
-let options = { corsOrigin: process.env.CORS_ORIGIN, staticDir, instanceId: process.env.INSTANCE_ID };
+let options = { corsOrigin: process.env.CORS_ORIGIN, staticDir, instanceId: process.env.INSTANCE_ID, trustProxy: process.env.TRUST_PROXY === "1" };
 if (process.env.REDIS_URL) {
   backend = createRedisBackend({ url: process.env.REDIS_URL, instanceId: process.env.INSTANCE_ID });
   options = {

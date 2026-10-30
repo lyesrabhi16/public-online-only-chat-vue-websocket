@@ -207,6 +207,7 @@ export function createChat(url?: string, connect: typeof io = io, invite: string
       const joined = state.joined[e.room.id]
       if (!joined) return
       const before = joined.room
+      if (e.room.rev < before.rev) return // an older description of the room, arriving late: what we have is newer
       if (before.locked !== e.room.locked) addLine(before.id, eventLine(e.room.locked ? 'event.locked' : 'event.unlocked'))
       if (before.code !== e.room.code) {
         addLine(before.id, eventLine('event.newCode', { code: e.room.code }))

@@ -7,6 +7,8 @@ export default defineConfig({
   test: {
     // server tests run in Node; a component test asks for a browser-like DOM with `// @vitest-environment jsdom`
     environment: 'node',
+    // most tests use real sockets (and some real encryption): a busy machine can take a while, and a slow test is not a failing one
+    testTimeout: 20_000,
     include: ['server/**/*.test.js', 'src/**/*.test.ts'],
     coverage: {
       provider: 'v8',

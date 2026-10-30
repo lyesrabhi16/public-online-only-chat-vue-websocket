@@ -1,0 +1,48 @@
+# The chat on several servers sharing the same state:  docker compose -f docker-compose.scale.yaml up --build
+# Open http://localhost:8080 : the load balancer shares the visitors between chat1 and chat2, and they see each other.
+# Stop one server (docker compose -f docker-compose.scale.yaml stop chat1) and the other one cleans up after it.
+# Check it from the outside:  npm run scale-check
+x-chat-environment: &chat-environment
+  PORT: "3000"
+  REDIS_URL: redis://redis:6379
+  TRUST_PROXY: "1" # only because nginx sets X-Forwarded-For itself
+
+x-chat: &chat
+  build: .
+  restart: unless-stopped
+  depends_on:
+    redis:
+      condition: service_healthy
+
+services:
+  redis:
+    image: redis:7-alpine
+    # nothing to keep: the chat state lives only as long as the people in it
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  chat1:
+    <<: *chat
+    environment:
+      <<: *chat-environment
+      INSTANCE_ID: chat1
+
+  chat2:
+    <<: *chat
+    environment:
+      <<: *chat-environment
+      INSTANCE_ID: chat2
+
+  proxy:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - chat1
+      - chat2

@@ -27,7 +27,7 @@ local function summary(rid)
   if #r == 0 then return nil end
   local h = {}
   for i = 1, #r, 2 do h[r[i]] = r[i + 1] end
-  return { id = rid, name = h.name, code = h.code, members = redis.call('ZCARD', k('m', rid)), locked = h.locked == '1', ownerId = h.owner ~= '' and h.owner or cjson.null }
+  return { id = rid, name = h.name, code = h.code, members = redis.call('ZCARD', k('m', rid)), locked = h.locked == '1', ownerId = h.owner ~= '' and h.owner or cjson.null, rev = tonumber(h.rev or '0') }
 end
 
 local function drop(rid)
@@ -55,6 +55,7 @@ local function leave(conn, rid, keep, grace)
     redis.call('HSET', k('r', rid), 'owner', nxt or '')
     if nxt then newOwner = { id = nxt, nickname = str(redis.call('HGET', k('u', nxt), 'nick')) } end
   end
+  redis.call('HINCRBY', k('r', rid), 'rev', 1)
   local emptied = redis.call('ZCARD', k('m', rid)) == 0
   local removed = false
   if emptied then
@@ -109,7 +110,7 @@ const SCRIPTS = {
     end
     if redis.call('SCARD', k('ur', conn)) >= maxPerUser then return cjson.encode({ err = 'rooms_per_user' }) end
     if not redis.call('SET', k('c', code), rid, 'NX') then return cjson.encode({ err = 'code_collision' }) end
-    redis.call('HSET', k('r', rid), 'name', name, 'code', code, 'owner', conn, 'locked', '0')
+    redis.call('HSET', k('r', rid), 'name', name, 'code', code, 'owner', conn, 'locked', '0', 'rev', '1')
     redis.call('ZADD', k('m', rid), redis.call('INCR', k('seq', '')), conn)
     redis.call('SADD', k('known', rid), nick)
     redis.call('SADD', k('rooms', ''), rid)
@@ -133,6 +134,7 @@ const SCRIPTS = {
     redis.call('SADD', k('ur', conn), rid)
     local owner = str(redis.call('HGET', k('r', rid), 'owner'))
     if owner == '' or not redis.call('ZSCORE', k('m', rid), owner) then redis.call('HSET', k('r', rid), 'owner', conn) end
+    redis.call('HINCRBY', k('r', rid), 'rev', 1)
     return cjson.encode({ room = summary(rid), already = false })`,
 
   leave: `${PRELUDE}
@@ -148,6 +150,7 @@ const SCRIPTS = {
     if not redis.call('ZSCORE', k('m', rid), conn) then return cjson.encode({ err = 'not_member' }) end
     if redis.call('HGET', k('r', rid), 'owner') ~= conn then return cjson.encode({ err = 'not_owner' }) end
     redis.call('HSET', k('r', rid), 'locked', locked)
+    redis.call('HINCRBY', k('r', rid), 'rev', 1)
     return cjson.encode({ room = summary(rid) })`,
 
   kick: `${PRELUDE}
@@ -168,6 +171,7 @@ const SCRIPTS = {
     if not redis.call('SET', k('c', code), rid, 'NX') then return cjson.encode({ err = 'code_collision' }) end
     redis.call('DEL', k('c', redis.call('HGET', k('r', rid), 'code')))
     redis.call('HSET', k('r', rid), 'code', code)
+    redis.call('HINCRBY', k('r', rid), 'rev', 1)
     return cjson.encode({ room = summary(rid) })`,
 
   // a counter of wrong codes per address, with an expiry
@@ -237,6 +241,7 @@ export class RedisRegistry {
       members: await this.redis.zcard(this.#key("m", roomId)),
       locked: room.locked === "1",
       ownerId: room.owner || null,
+      rev: Number(room.rev ?? 0),
     };
   }
 

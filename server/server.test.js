@@ -348,6 +348,44 @@ describe("robustness", () => {
   });
 });
 
+describe("addresses behind a proxy", () => {
+  /** A connection that claims to come from `forwardedFor`, with a nickname. */
+  const opener = (port) => async (forwardedFor, nickname) => {
+    const socket = connect(`http://localhost:${port}`, { transports: ["websocket"], reconnection: false, extraHeaders: { "X-Forwarded-For": forwardedFor } });
+    clients.push(socket);
+    await new Promise((resolve) => socket.on("connect", resolve));
+    await ask(socket, "hello", { nickname });
+    return socket;
+  };
+  const guess = async (socket, n) => (await ask(socket, "room:join", { code: `AAAAA${"BCDEFGHJKLMNP"[n]}` })).code;
+
+  it("ignores X-Forwarded-For unless told to trust it: claiming another address does not reset the limit", async () => {
+    const own = createChatServer({ corsOrigin: "*" });
+    const open = opener(await own.listen(0));
+    try {
+      const first = await open("1.1.1.1", "Guesser A");
+      for (let i = 0; i < LIMITS.wrongCodes; i++) await guess(first, i);
+      const second = await open("2.2.2.2", "Guesser B"); // another claimed address, the same real one
+      expect(await guess(second, 0)).toBe("too_many_wrong_codes");
+    } finally {
+      await own.close();
+    }
+  });
+
+  it("with trustProxy, counts each visitor behind the proxy separately", async () => {
+    const own = createChatServer({ corsOrigin: "*", trustProxy: true });
+    const open = opener(await own.listen(0));
+    try {
+      const loud = await open("1.1.1.1", "Loud"), quiet = await open("2.2.2.2", "Quiet");
+      for (let i = 0; i < LIMITS.wrongCodes; i++) await ask(loud, "room:join", { code: `AAAAA${"BCDEFGHJKL"[i]}` });
+      expect((await ask(loud, "room:join", { code: "AAAAAM" })).code).toBe("too_many_wrong_codes");
+      expect((await ask(quiet, "room:join", { code: "AAAAAM" })).code).toBe("code_unknown"); // another visitor is not punished
+    } finally {
+      await own.close();
+    }
+  });
+});
+
 describe("http", () => {
   it("answers a health check with counts, never names or codes", async () => {
     const body = await (await fetch(`http://localhost:${port}/health`)).json();

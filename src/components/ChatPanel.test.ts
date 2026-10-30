@@ -22,7 +22,7 @@ const msg = (over: Partial<Msg> = {}): Msg => ({
 })
 
 const joined = (over: Partial<JoinedRoom> = {}): JoinedRoom => ({
-  room: { id: 'r1', name: 'Study group', code: 'K7M2QX', members: 3, locked: false, ownerId: 'me' },
+  room: { id: 'r1', name: 'Study group', code: 'K7M2QX', members: 3, locked: false, ownerId: 'me', rev: 1 },
   key: {} as CryptoKey,
   lines: [
     { kind: 'event', id: 'e1', at: '2026-01-01T10:00:00.000Z', key: 'event.youJoined', params: {} },
