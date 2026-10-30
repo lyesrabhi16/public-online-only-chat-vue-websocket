@@ -8,14 +8,14 @@ Chat rooms with two rules. **A room can only be entered with its code**, and **n
 
 <img src="docs/screenshots/conversation.png" alt="A conversation: a reply, a mention, a photo, a voice message with its waveform, reactions">
 
-More: [recording a voice message](docs/screenshots/recording.png) · [unread counters, with a mention](docs/screenshots/unread.png) · [dark mode](docs/screenshots/dark.png) · [in French](docs/screenshots/french.png)
+More: [picking somebody to mention](docs/screenshots/mentions.png) · [recording a voice message](docs/screenshots/recording.png) · [unread counters, with a mention](docs/screenshots/unread.png) · [dark mode](docs/screenshots/dark.png) · [in French](docs/screenshots/french.png)
 
 ## What you can do
 
 - **Rooms and codes**: create a room and you are inside, running it, with its **code** (ten letters and digits such as `K7M2Q XAB9T`). Anybody who has the code can come in; nobody else can. Rooms cannot be browsed or listed. Somebody who comes in is let into the encrypted group by a member who is there, so a room nobody answers in cannot be entered (the newcomer is told after 20 seconds).
 - **Invite**: an **invite link** (`/#/join/K7M2QXAB9T`, the code is after the `#`, which browsers never send to a server) and a **QR code** to scan with a phone, with the share sheet where the browser has one. The code is taken out of the address bar as soon as the page has read it.
-- **Messages**: text, **photos** (shrunk to 900 px in the browser), **voice messages** (up to 30 seconds, recorded with a **live scrolling waveform**, shown as loudness bars that fill while they play), **replies** (the quoted message is shown), **edit** and **delete** (your own), **reactions** (👍 ❤️ 😂 😮 😢 🎉), **@mentions** (highlighted, yours in a stronger colour) and **whispers** to one person (`/w Nickname message`).
-- **Keeping up**: an unread counter per room (with a mark when somebody mentioned you), the count in the browser tab title, an optional beep and optional desktop notifications (which never contain what was said), "typing…", who is in the room, "joined / left" notices.
+- **Messages**: text, **photos** (shrunk to 900 px in the browser), **voice messages** (up to 30 seconds, recorded with a **live scrolling waveform**, shown as loudness bars that fill while they play), **replies** (the quoted message is shown), **edit** and **delete** (your own), **reactions** (👍 ❤️ 😂 😮 😢 🎉), **@mentions** (typing `@` opens a list of the people in the room to pick from, with the arrow keys, Enter or Tab, or a click; `@all` mentions everybody; a mention is highlighted, yours in a stronger colour) and **whispers** to one person (`/w Nickname message`).
+- **Keeping up**: an unread counter per room (with a mark when somebody mentioned you), the count in the browser tab title, a **chime of its own when you are mentioned** (by name or with `@all`, on unless you turn it off in the settings), an optional beep for any other new message you are not looking at, and optional desktop notifications (which never contain what was said), "typing…", who is in the room, "joined / left" notices.
 - **Running a room**: the person who runs it can **lock** it (nobody new comes in, but people who were in can come back after a connection blip), **remove** somebody (who cannot come back with the code), or make a **new code** (the old one stops finding the room; the members learn the new one through the encrypted group). If the owner leaves, the person who has been there longest takes over. Anybody can **mute** somebody: their messages disappear from your screen only.
 - **Live only**: the server keeps no history and the browser stores nothing (no cookie, no local storage). Leaving a room forgets everything said in it. A room exists while somebody is in it; if the last person was only disconnected it stays open for a minute, so a blip does not cost you your room and code.
 - **Reconnection**: if the connection drops, the page says hello again with the same nickname, goes back into its rooms using their codes, and asks the members to let it back into the group (what was said while it was away is lost).
@@ -114,7 +114,7 @@ Everything the client sends is untrusted, so the server checks it (see `server/r
 | --- | --- |
 | room code | 10 characters from 32 (no `0/O` or `1/I`): 50 bits, chosen at random by the page. The server never sees it, only its **handle** (64 hex digits), which must be unique among open rooms |
 | wrong handles | 10 per address every 5 minutes (joining, creating and changing the code all count), then even the right one is refused until the window passes. The limit is shared by all servers; behind a proxy set `TRUST_PROXY=1` so that each visitor has their own. It stops outsiders from guessing; it does nothing against the server itself (see above) |
-| nickname | 2 to 20 letters, digits, spaces, `.`, `_`, `-`; unique among people online (across servers) |
+| nickname | 2 to 20 letters, digits, spaces, `.`, `_`, `-`; unique among people online (across servers); `all` is kept for `@all` |
 | room name | 2 to 30 characters; two rooms can share a name, their handles tell them apart; at most 200 rooms |
 | message | the server measures it (it cannot read it): up to 6,000 characters of encrypted text (500 characters), or 450 KB for a photo or voice message. Text: 5 per 5 seconds per connection; photos and voice: 3 per 10 seconds |
 | edit and delete | only the author: the server gives the sender a signed **proof** with each message (never relayed to others); edit and delete must present it |
@@ -149,8 +149,8 @@ Client to server, each with an acknowledgement `{ ok: true, ... }` or `{ error, 
 ## Tests
 
 ```bash
-npm test                        # 268 tests without Redis (51 more are skipped)
-REDIS_URL=redis://localhost:6379 npm test   # 319 tests, with the Redis registry and two real servers
+npm test                        # 309 tests without Redis (52 more are skipped)
+REDIS_URL=redis://localhost:6379 npm test   # 361 tests, with the Redis registry and two real servers
 npm run test:coverage           # with a coverage report (about 84%, 97% on the server)
 npm run build                   # type-checks the code and the tests, then builds
 ```

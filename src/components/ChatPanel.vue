@@ -37,6 +37,7 @@ const composer = ref<InstanceType<typeof Composer> | null>(null)
 
 const isOwner = computed(() => props.joined.room.ownerId === props.me.id)
 const nicknames = computed(() => props.joined.members.map((m) => m.nickname))
+const others = computed(() => nicknames.value.filter((n) => n !== props.me.nickname))
 const byId = computed(() => {
   const map = new Map<string, Msg>()
   for (const line of props.joined.lines) if (line.kind === 'message') map.set(line.msg.id, line.msg)
@@ -157,6 +158,7 @@ const whisper = (m: Member) => composer.value?.prefill(`/w ${m.nickname} `)
       ref="composer"
       :reply-to="replyTo"
       :editing="editing"
+      :nicknames="others"
       @send="onSend"
       @save="onSave"
       @photo="(p) => (emit('photo', p, replyTo?.id ?? null), done())"

@@ -5,7 +5,7 @@ import { errorText, t, type Key } from '../i18n'
 import { AUDIO_URL, MAX_VOICE_MS, PHOTO_URL, type Photo, type Voice } from '../media'
 import { AheadError, Group, newCandidate, supported, type Change, type Candidate } from '../mls'
 import type { JoinedRoom, Line, Member, Msg, Room, Status } from '../types'
-import { mentions, parseWhisper } from '../utils'
+import { mentions, mentionsByName, mentionsEveryone, parseWhisper } from '../utils'
 
 const MAX_LINES = 500 // per room: the oldest lines scroll away
 const TYPING_MS = 4000
@@ -89,7 +89,7 @@ export function createChat(url?: string, connect: typeof io = io, invite: string
     active: null as string | null,
     error: '',
     invite: invite as string | null, // a code from an invite link, used once the person has a nickname
-    settings: { sound: false, notifications: false },
+    settings: { sound: false, mentionSound: true, notifications: false },
   })
 
   let socket: Socket | null = null
@@ -360,11 +360,15 @@ export function createChat(url?: string, connect: typeof io = io, invite: string
     return msg
   }
 
-  function notifyAbout(joined: JoinedRoom, msg: Msg, mention: boolean) {
-    if (state.settings.sound && (isHidden() || state.active !== joined.room.id || mention)) beep()
+  function notifyAbout(joined: JoinedRoom, msg: Msg, mention: boolean, everyone: boolean) {
     if (state.settings.notifications && isHidden() && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-      const text = mention ? t('notify.mention', { name: msg.from.nickname, room: joined.room.name }) : t('notify.message', { room: joined.room.name })
-      new Notification(text, { tag: joined.room.id }) // never the text of the message itself
+      const params = { name: msg.from.nickname, room: joined.room.name }
+      const text = mention ? t(everyone ? 'notify.mentionAll' : 'notify.mention', params) : t('notify.message', params)
+      try {
+        new Notification(text, { tag: joined.room.id }) // never the text of the message itself
+      } catch {
+        /* the browser refused (some phones only allow them from a service worker): the sound and the unread mark are still there */
+      }
     }
   }
 
@@ -375,14 +379,19 @@ export function createChat(url?: string, connect: typeof io = io, invite: string
     addLine(roomId, { kind: 'message', msg })
     if (msg.mine || joined.muted.includes(msg.from.nickname.toLowerCase())) return
     joined.typing = joined.typing.filter((n) => n !== msg.from.nickname)
-    const mention = !!state.me && mentions(msg.text, state.me.nickname)
-    if (state.active !== roomId || isHidden()) {
+    // read with the whole room's nicknames, as everybody does; a whisper is for you alone, so "@all" in it means nothing: only your name does
+    const room = joined.members.map((m) => m.nickname)
+    const everyone = !msg.whisperTo && mentionsEveryone(msg.text, room)
+    const mention = !!state.me && (msg.whisperTo ? mentionsByName(msg.text, state.me.nickname, room) : mentions(msg.text, state.me.nickname, room))
+    const away = state.active !== roomId || isHidden()
+    if (away) {
       joined.unread++
       if (mention) joined.mentioned = true
-      notifyAbout(joined, msg, mention)
-    } else if (state.settings.sound && mention) {
-      beep()
+      notifyAbout(joined, msg, mention, everyone)
     }
+    // being mentioned has a sound of its own, on unless you turned it off; the plain beep is for any new message you are not looking at
+    if (mention && state.settings.mentionSound) chime()
+    else if (state.settings.sound && away) beep()
   }
 
   function bind(s: Socket) {
@@ -521,6 +530,7 @@ export function createChat(url?: string, connect: typeof io = io, invite: string
 
   /** Picks a nickname (and goes into the room of an invite link, if there was one). Resolves with an error message, or '' when it worked. */
   async function login(nickname: string): Promise<string> {
+    unlockAudio()
     state.error = ''
     try {
       await ensureConnected()
@@ -604,6 +614,7 @@ export function createChat(url?: string, connect: typeof io = io, invite: string
 
   /** The only way into a room: its code. Resolves with an error message, or '' when it worked. */
   async function join(raw: string): Promise<string> {
+    unlockAudio()
     if (!isCode(raw)) return fail({ code: 'code_invalid' })
     if (!(await supported())) return t('error.browser')
     const code = canonicalCode(raw)
@@ -627,6 +638,7 @@ export function createChat(url?: string, connect: typeof io = io, invite: string
 
   /** A new room: we are in it and run it, and its code is for sharing. */
   async function create(name: string): Promise<string> {
+    unlockAudio()
     if (!(await supported())) return t('error.browser')
     const code = generateCode()
     const secrets = await deriveSecrets(code, cost)
@@ -668,6 +680,7 @@ export function createChat(url?: string, connect: typeof io = io, invite: string
 
   /** Text; "/w Nickname hello" is a whisper to that person. Resolves with an error message, or ''. */
   async function send(text: string, replyTo: string | null = null): Promise<string> {
+    unlockAudio()
     const joined = current()
     const live = state.active ? lives.get(state.active) : undefined
     if (!joined || !live || !state.me) return t('error.open_first')
@@ -762,25 +775,66 @@ export function createChat(url?: string, connect: typeof io = io, invite: string
   }
 
   // ---- sound and notifications
-  function beep() {
+  /** One note: `start` and `length` in seconds from now. */
+  function tone(context: AudioContext, frequency: number, start: number, length: number, volume: number) {
+    const oscillator = context.createOscillator()
+    const gain = context.createGain()
+    const at = context.currentTime + start
+    oscillator.frequency.value = frequency
+    gain.gain.setValueAtTime(volume, at)
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + length)
+    oscillator.connect(gain).connect(context.destination)
+    oscillator.start(at)
+    oscillator.stop(at + length)
+  }
+
+  /**
+   * The audio output. A browser starts it suspended when it was made outside a click or a key press, and only a call made in one
+   * wakes it, so this is also called when somebody acts (see unlockAudio): by the time a mention arrives it is running.
+   */
+  function output(): AudioContext {
+    audio ??= new AudioContext()
+    if (audio.state === 'suspended') void audio.resume().catch(() => {})
+    return audio
+  }
+
+  /** Called when somebody clicks or types, which is when a browser lets the page get the sound ready. */
+  function unlockAudio() {
     try {
-      audio ??= new AudioContext()
-      const oscillator = audio.createOscillator()
-      const gain = audio.createGain()
-      oscillator.frequency.value = 880
-      gain.gain.setValueAtTime(0.08, audio.currentTime)
-      gain.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + 0.25)
-      oscillator.connect(gain).connect(audio.destination)
-      oscillator.start()
-      oscillator.stop(audio.currentTime + 0.25)
+      output()
     } catch {
       /* no sound available: nothing to do */
     }
   }
 
+  /** Plays notes, if the browser lets us. */
+  function play(notes: [frequency: number, start: number, length: number, volume: number][]) {
+    try {
+      const context = output()
+      for (const [frequency, start, length, volume] of notes) tone(context, frequency, start, length, volume)
+    } catch {
+      /* no sound available: nothing to do */
+    }
+  }
+
+  /** A new message: one note. */
+  const beep = () => play([[880, 0, 0.25, 0.08]])
+
+  /** You were mentioned: two notes going up, so that it cannot be mistaken for the beep of a message. */
+  const chime = () =>
+    play([
+      [660, 0, 0.16, 0.12],
+      [990, 0.13, 0.32, 0.12],
+    ])
+
   function setSound(on: boolean) {
     state.settings.sound = on
     if (on) beep() // a click is the moment browsers allow sound, and it shows what it will sound like
+  }
+
+  function setMentionSound(on: boolean) {
+    state.settings.mentionSound = on
+    if (on) chime()
   }
 
   /** Asks the browser for permission. Answers whether notifications are on. */
@@ -812,7 +866,7 @@ export function createChat(url?: string, connect: typeof io = io, invite: string
     sent.clear()
   }
 
-  return { state, login, open, markRead, join, create, leave, send, sendPhoto, sendVoice, edit, remove, react, typing, lock, kick, newCode, toggleMute, setSound, setNotifications, unreadTotal, logout }
+  return { state, login, open, markRead, join, create, leave, send, sendPhoto, sendVoice, edit, remove, react, typing, lock, kick, newCode, toggleMute, setSound, setMentionSound, setNotifications, unreadTotal, logout }
 }
 
 export type Chat = ReturnType<typeof createChat>

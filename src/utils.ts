@@ -52,33 +52,87 @@ export async function copyText(text: string): Promise<boolean> {
   return copied
 }
 
+/** The word that mentions everybody in the room: "@all". The server does not let anybody take it as a nickname. */
+export const MENTION_ALL = 'all'
+
 export interface Segment {
   text: string
-  /** the nickname this piece of text mentions, if it is a mention */
+  /** the nickname this piece of text mentions, if it is a mention of a person */
   mention?: string
+  /** true for "@all" */
+  all?: boolean
 }
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-/** A message cut into plain text and "@nickname" mentions of the people in the room (nicknames may contain spaces). */
+/** What may follow a mention without making it a longer word: not a letter, a digit or "_", and not "." or "-" going on into one ("@all-hands", "@Bob.Smith"). */
+const MENTION_END = '(?![\\p{L}\\p{N}_]|[.-][\\p{L}\\p{N}_])'
+
+/** The nicknames a message can mention. "all" is never one of them: it is the word for everybody (the server does not give it as a nickname). */
+const mentionable = (nicknames: string[]) =>
+  [...new Set(nicknames)].filter((n) => n && n.toLowerCase() !== MENTION_ALL).sort((a, b) => b.length - a.length)
+
+/**
+ * A message cut into plain text, "@nickname" mentions of the people in the room (nicknames may contain spaces) and "@all".
+ * Give it the whole room: a nickname that starts like "all" ("all-star") is read as that person, for everybody.
+ * An "@" inside a word ("me@all.com") is not a mention.
+ */
 export function splitMentions(text: string, nicknames: string[]): Segment[] {
-  const names = [...new Set(nicknames)].filter(Boolean).sort((a, b) => b.length - a.length)
-  if (names.length === 0 || !text.includes('@')) return [{ text }]
-  const pattern = new RegExp(`@(${names.map(escapeRegExp).join('|')})(?![\\p{L}\\p{N}_])`, 'giu')
+  if (!text.includes('@')) return [{ text }]
+  const names = mentionable(nicknames)
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}_])@(${[...names, MENTION_ALL].map(escapeRegExp).join('|')})${MENTION_END}`, 'giu')
   const segments: Segment[] = []
   let last = 0
   for (const match of text.matchAll(pattern)) {
     if (match.index > last) segments.push({ text: text.slice(last, match.index) })
-    segments.push({ text: match[0], mention: names.find((n) => n.toLowerCase() === match[1].toLowerCase()) })
+    const name = names.find((n) => n.toLowerCase() === match[1].toLowerCase())
+    segments.push(name ? { text: match[0], mention: name } : { text: match[0], all: true })
     last = match.index + match[0].length
   }
   if (last < text.length) segments.push({ text: text.slice(last) })
   return segments
 }
 
-/** Whether a message mentions this nickname ("@ada", in any case). */
-export function mentions(text: string, nickname: string): boolean {
-  return splitMentions(text, [nickname]).some((s) => s.mention !== undefined)
+/** Whether a message mentions this nickname by name ("@ada", in any case). `nicknames` is the whole room. */
+export function mentionsByName(text: string, nickname: string, nicknames: string[] = []): boolean {
+  const me = nickname.toLowerCase()
+  return splitMentions(text, [...nicknames, nickname]).some((s) => s.mention?.toLowerCase() === me)
+}
+
+/** Whether a message mentions everybody ("@all"). `nicknames` is the whole room. */
+export function mentionsEveryone(text: string, nicknames: string[] = []): boolean {
+  return splitMentions(text, nicknames).some((s) => s.all)
+}
+
+/** Whether a message mentions this nickname or everybody. `nicknames` is the whole room: everybody must read a message the same way. */
+export function mentions(text: string, nickname: string, nicknames: string[] = []): boolean {
+  return mentionsByName(text, nickname, nicknames) || mentionsEveryone(text, [...nicknames, nickname])
+}
+
+/**
+ * Where the mention that the caret is in ends: the whole name when the caret is inside one already typed ("@Ad|a Lovelace"), so that
+ * a suggestion can replace all of it; otherwise at the caret.
+ */
+export function mentionEnd(text: string, start: number, caret: number, nicknames: string[]): number {
+  const rest = text.slice(start + 1).toLowerCase()
+  for (const name of [...mentionable(nicknames), MENTION_ALL].sort((a, b) => b.length - a.length)) {
+    const end = start + 1 + name.length
+    if (end >= caret && rest.startsWith(name.toLowerCase()) && !/^[\p{L}\p{N}_]/u.test(text.slice(end))) return end
+  }
+  return caret
+}
+
+/** The "@" being typed just before the caret, if any: where it starts and what follows it (a nickname can have spaces, so what follows can too). */
+export function mentionQuery(text: string, caret: number): { start: number; query: string } | null {
+  const match = /(?<![\p{L}\p{N}_])@([\p{L}\p{N} ._-]{0,20})$/u.exec(text.slice(0, caret))
+  return match ? { start: match.index, query: match[1] } : null
+}
+
+/** What a mention being typed could be: "all" first, then the nicknames that start with what was typed. Nothing once it cannot be a name any more. */
+export function mentionCandidates(query: string, nicknames: string[]): string[] {
+  const typed = query.toLowerCase()
+  const names = mentionable(nicknames).filter((n) => n.toLowerCase().startsWith(typed)).sort((a, b) => a.localeCompare(b))
+  return MENTION_ALL.startsWith(typed) ? [MENTION_ALL, ...names] : names
 }
 
 /** "/w Bob hello there" as { to: "Bob", text: "hello there" }: the longest nickname of the room that starts the rest of the line. */

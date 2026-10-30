@@ -11,13 +11,14 @@ export interface RoomItem {
   mentioned: boolean
 }
 
-defineProps<{ rooms: RoomItem[]; active: string | null; nickname: string; error?: string; sound: boolean; notifications: boolean }>()
+defineProps<{ rooms: RoomItem[]; active: string | null; nickname: string; error?: string; sound: boolean; mentionSound: boolean; notifications: boolean }>()
 const emit = defineEmits<{
   open: [id: string]
   create: [name: string]
   join: [code: string]
   logout: []
   sound: [on: boolean]
+  mentionSound: [on: boolean]
   notifications: [on: boolean]
   language: [locale: Locale]
 }>()
@@ -51,6 +52,7 @@ const choose = (next: 'join' | 'create') => {
     </header>
 
     <div v-if="settings" class="settings">
+      <label><input type="checkbox" :checked="mentionSound" @change="emit('mentionSound', ($event.target as HTMLInputElement).checked)" /> {{ t('settings.mentionSound') }}</label>
       <label><input type="checkbox" :checked="sound" @change="emit('sound', ($event.target as HTMLInputElement).checked)" /> {{ t('settings.sound') }}</label>
       <label><input type="checkbox" :checked="notifications" @change="emit('notifications', ($event.target as HTMLInputElement).checked)" /> {{ t('settings.notifications') }}</label>
       <label>

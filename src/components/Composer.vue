@@ -3,10 +3,10 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../i18n'
 import { MAX_VOICE_MS, preparePhoto, VoiceRecorder, type Photo, type Voice } from '../media'
 import type { Msg } from '../types'
-import { clock } from '../utils'
+import { MENTION_ALL, clock, colorFor, mentionCandidates, mentionEnd, mentionQuery } from '../utils'
 import WaveBars from './WaveBars.vue'
 
-const props = defineProps<{ replyTo: Msg | null; editing: Msg | null }>()
+const props = defineProps<{ replyTo: Msg | null; editing: Msg | null; nicknames?: string[] }>()
 const emit = defineEmits<{
   send: [text: string]
   save: [text: string]
@@ -28,6 +28,48 @@ const canRecord = VoiceRecorder.supported()
 let recorder: VoiceRecorder | null = null
 let ticker: ReturnType<typeof setInterval> | undefined
 let typingTimer: ReturnType<typeof setTimeout> | undefined
+
+// ---- mentions: typing "@" lists the people of the room (and "all") to pick from
+const MAX_LENGTH = 500
+const caret = ref(0)
+const choice = ref(0)
+const dismissed = ref(false) // Escape, or a pick, closes the list until the next keystroke
+const mention = computed(() => (dismissed.value ? null : mentionQuery(text.value, caret.value)))
+const options = computed(() => (mention.value ? mentionCandidates(mention.value.query, props.nicknames ?? []) : []))
+const listOpen = computed(() => options.value.length > 0)
+watch(options, () => (choice.value = 0))
+
+const syncCaret = () => (caret.value = input.value?.selectionStart ?? text.value.length)
+
+/** Puts "@name " where the "@" was typed, in place of the whole mention when the caret is inside one. Answers whether it did (it does not when the message would get too long). */
+const pick = (name: string): boolean => {
+  const typing = mention.value
+  if (!typing) return false
+  const before = text.value.slice(0, typing.start)
+  const after = text.value.slice(mentionEnd(text.value, typing.start, caret.value, props.nicknames ?? []))
+  const inserted = `@${name}${after.startsWith(' ') ? '' : ' '}`
+  if (before.length + inserted.length + after.length > MAX_LENGTH) return false
+  text.value = before + inserted + after
+  caret.value = before.length + inserted.length + (after.startsWith(' ') ? 1 : 0)
+  dismissed.value = true
+  void nextTick(() => {
+    input.value?.focus()
+    input.value?.setSelectionRange(caret.value, caret.value)
+  })
+  return true
+}
+
+const onKeydown = (e: KeyboardEvent) => {
+  if (!listOpen.value) return
+  const last = options.value.length - 1
+  if (e.key === 'ArrowDown') choice.value = choice.value >= last ? 0 : choice.value + 1
+  else if (e.key === 'ArrowUp') choice.value = choice.value <= 0 ? last : choice.value - 1
+  else if (e.key === 'Enter' || e.key === 'Tab') {
+    if (!pick(options.value[choice.value])) return // nothing was filled in: Enter still sends and Tab still moves on
+  } else if (e.key === 'Escape') dismissed.value = true
+  else return
+  e.preventDefault()
+}
 
 // editing starts with the text of the message; replying puts you in the box
 watch(
@@ -55,6 +97,8 @@ const submit = () => {
 }
 
 const onInput = () => {
+  dismissed.value = false
+  syncCaret()
   if (props.editing) return
   emit('typing', text.value.trim().length > 0)
   clearTimeout(typingTimer)
@@ -133,6 +177,24 @@ defineExpose({ prefill: (value: string) => ((text.value = value), void nextTick(
       <button type="button" class="link" @click="cancel">{{ t('composer.cancel') }}</button>
     </div>
 
+    <ul v-if="listOpen && !recording" id="mention-list" class="mention-list" role="listbox" :aria-label="t('mention.list')">
+      <li
+        v-for="(name, i) in options"
+        :id="`mention-option-${i}`"
+        :key="name"
+        role="option"
+        :aria-selected="i === choice"
+        :class="{ active: i === choice, everyone: name === MENTION_ALL }"
+        @mousedown.prevent="pick(name)"
+        @mousemove="choice = i"
+      >
+        <span v-if="name === MENTION_ALL" class="avatar all" aria-hidden="true">@</span>
+        <span v-else class="avatar" aria-hidden="true" :style="{ background: colorFor(name) }">{{ name.charAt(0).toUpperCase() }}</span>
+        <strong>{{ name === MENTION_ALL ? '@all' : name }}</strong>
+        <small v-if="name === MENTION_ALL">{{ t('mention.all') }}</small>
+      </li>
+    </ul>
+
     <form v-if="!recording" class="composer" @submit.prevent="submit">
       <button type="button" class="icon-button" :disabled="busy || !!editing" :title="t('composer.photo')" :aria-label="t('composer.photo')" @click="files?.click()">📷</button>
       <input ref="files" class="visually-hidden" type="file" accept="image/*" tabindex="-1" @change="onPick" />
@@ -140,12 +202,20 @@ defineExpose({ prefill: (value: string) => ((text.value = value), void nextTick(
         ref="input"
         v-model="text"
         type="text"
-        maxlength="500"
+        :maxlength="MAX_LENGTH"
         :placeholder="t('composer.placeholder')"
         :title="t('composer.whisperHint')"
         aria-label="Message"
         autocomplete="off"
+        role="combobox"
+        aria-autocomplete="list"
+        :aria-expanded="listOpen"
+        :aria-controls="listOpen ? 'mention-list' : undefined"
+        :aria-activedescendant="listOpen ? `mention-option-${choice}` : undefined"
         @input="onInput"
+        @keydown="onKeydown"
+        @keyup="syncCaret"
+        @click="syncCaret"
         @paste="onPaste"
       />
       <button v-if="canRecord && !text.trim() && !editing" type="button" class="icon-button" :title="t('composer.voice')" :aria-label="t('composer.voice')" @click="startRecording">🎤</button>

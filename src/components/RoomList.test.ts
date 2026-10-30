@@ -13,7 +13,7 @@ const rooms = [
   { id: 'r2', name: 'Movie night', people: 1, unread: 4, mentioned: false },
   { id: 'r3', name: 'Chess', people: 2, unread: 2, mentioned: true },
 ]
-const make = (props = {}) => mount(RoomList, { props: { rooms, active: 'r1', nickname: 'Ada', sound: false, notifications: false, ...props } })
+const make = (props = {}) => mount(RoomList, { props: { rooms, active: 'r1', nickname: 'Ada', sound: false, mentionSound: true, notifications: false, ...props } })
 
 describe('RoomList', () => {
   it('lists only the rooms you are in, with their head counts', () => {
@@ -74,9 +74,14 @@ describe('RoomList', () => {
     expect(wrapper.find('.settings').exists()).toBe(false)
     await wrapper.find('header button[aria-expanded]').trigger('click')
     const boxes = wrapper.findAll('.settings input[type=checkbox]')
-    await boxes[0].setValue(true)
+    expect(boxes).toHaveLength(3)
+    expect((boxes[0].element as HTMLInputElement).checked).toBe(true) // the sound of a mention is on until you turn it off
+    expect((boxes[1].element as HTMLInputElement).checked).toBe(false)
+    await boxes[0].setValue(false)
     await boxes[1].setValue(true)
+    await boxes[2].setValue(true)
     await wrapper.find('.settings select').setValue('fr')
+    expect(wrapper.emitted('mentionSound')).toEqual([[false]])
     expect(wrapper.emitted('sound')).toEqual([[true]])
     expect(wrapper.emitted('notifications')).toEqual([[true]])
     expect(wrapper.emitted('language')).toEqual([['fr']])
