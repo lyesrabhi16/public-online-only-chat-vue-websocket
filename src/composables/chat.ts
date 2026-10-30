@@ -184,38 +184,43 @@ export function createChat(url?: string, connect: typeof io = io, invite: string
     try {
       do {
         live.again = false
-        for (;;) {
-          const present = new Set(joined.members.map((m) => m.id))
-          if (live.group.keeper(present) !== state.me.id) break
-          const gone = live.group.roster().filter((m) => !present.has(m.id)).map((m) => m.leaf)
-          let next: Request | undefined
-          for (const request of [...live.requests.values()]) {
-            if (live.group.hasMember(request.from.id) || !present.has(request.from.id)) {
-              live.requests.delete(request.from.id)
-            } else if (verifyProof(live.secrets.admissionKey, fromBase64(request.keyPackage), request.proof)) {
-              next ??= request
-            } else {
-              live.requests.delete(request.from.id) // somebody who does not know the code
-            }
-          }
-          if (gone.length === 0 && !next) break
-          let kept = false
-          try {
-            kept = await live.group.change(
-              { remove: gone, ...(next ? { add: { candidate: fromBase64(next.keyPackage), who: { id: next.from.id, nickname: next.from.nickname }, handle: live.secrets.handle } } : {}) },
-              (change) => submit(roomId, change, next?.from.id),
-            )
-          } catch {
-            if (next) live.requests.delete(next.from.id) // a request that cannot be honoured is dropped
-            continue
-          }
-          if (!kept) break // somebody else's change won: it is on its way, and we look again when it has been applied
-          if (next) live.requests.delete(next.from.id)
-        }
+        let round = await keepRound(roomId, live, joined, state.me.id)
+        while (round === 'again') round = await keepRound(roomId, live, joined, state.me.id)
       } while (live.again)
     } finally {
       live.keeping = false
     }
+  }
+
+  /** The first request that can be honoured. The ones that cannot are dropped: from somebody who is gone or in the group already, or who does not know the code. */
+  function pickRequest(live: Live, present: ReadonlySet<string>): Request | undefined {
+    let next: Request | undefined
+    for (const request of live.requests.values()) {
+      const honourable = !live.group.hasMember(request.from.id) && present.has(request.from.id) && verifyProof(live.secrets.admissionKey, fromBase64(request.keyPackage), request.proof)
+      if (!honourable) live.requests.delete(request.from.id)
+      else next ??= request
+    }
+    return next
+  }
+
+  /** One change of the group by the keeper: lets in one person, takes out the ones who are gone. 'again' when there may be more to do. */
+  async function keepRound(roomId: string, live: Live, joined: JoinedRoom, myId: string): Promise<'again' | 'done'> {
+    const present = new Set(joined.members.map((m) => m.id))
+    if (live.group.keeper(present) !== myId) return 'done'
+    const gone = live.group.roster().filter((m) => !present.has(m.id)).map((m) => m.leaf)
+    const next = pickRequest(live, present)
+    if (gone.length === 0 && !next) return 'done'
+    let kept: boolean
+    try {
+      const add = next && { candidate: fromBase64(next.keyPackage), who: { id: next.from.id, nickname: next.from.nickname }, handle: live.secrets.handle }
+      kept = await live.group.change({ remove: gone, ...(add ? { add } : {}) }, (change) => submit(roomId, change, next?.from.id))
+    } catch {
+      if (next) live.requests.delete(next.from.id) // a request that cannot be honoured is dropped
+      return 'again'
+    }
+    if (!kept) return 'done' // somebody else's change won: it is on its way, and we look again when it has been applied
+    if (next) live.requests.delete(next.from.id)
+    return 'again'
   }
 
   /** Follows a change of the group that arrived, then whatever was waiting for it. */

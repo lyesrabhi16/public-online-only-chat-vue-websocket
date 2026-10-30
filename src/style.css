@@ -177,7 +177,7 @@ button:focus-visible {
 
 .banner {
   position: absolute;
-  inset: 0 0 auto 0;
+  inset: 0 0 auto;
   z-index: 5;
   padding: 0.4rem;
   text-align: center;
@@ -294,6 +294,7 @@ button:focus-visible {
 
 .panel > header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.6rem;
   padding: 0.7rem 1rem;
@@ -361,6 +362,7 @@ button:focus-visible {
 }
 
 .message {
+  position: relative;
   align-self: flex-start;
   display: grid;
   max-width: min(32rem, 85%);
@@ -372,7 +374,7 @@ button:focus-visible {
 
 .message.mine {
   align-self: flex-end;
-  border-radius: 16px 16px 4px 16px;
+  border-radius: 16px 16px 4px;
   background: var(--mine);
   color: var(--on-mine);
 }
@@ -563,10 +565,6 @@ input.code {
 }
 
 /* ---- the conversation: owner tools, members, messages ---- */
-.panel > header {
-  flex-wrap: wrap;
-}
-
 .small {
   padding: 0.3rem 0.7rem;
   font-size: 0.85rem;
@@ -592,10 +590,6 @@ input.code {
   background: var(--surface);
   color: var(--muted);
   font-size: 0.75rem;
-}
-
-.message {
-  position: relative;
 }
 
 .message.whisper {
