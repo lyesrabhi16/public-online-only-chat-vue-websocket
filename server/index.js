@@ -78,7 +78,7 @@ export function createChatServer({
 
   const announceMembers = async (roomId) => io.to(key(roomId)).emit("room:members", { room: roomId, members: await registry.members(roomId) });
   const announceEvent = (roomId, kind, nickname) => io.to(key(roomId)).emit("room:event", { room: roomId, kind, nickname, at: new Date().toISOString() });
-  const announceRoom = (room) => io.to(key(room.id)).emit("room:updated", { room });
+  const announceRoom = (room) => room && io.to(key(room.id)).emit("room:updated", { room });
 
   io.on("connection", (socket) => {
     const texts = new RateLimiter();
@@ -94,7 +94,7 @@ export function createChatServer({
         await announceMembers(roomId);
         if (result.newOwner) {
           announceEvent(roomId, "owner", result.newOwner.nickname);
-          announceRoom((await registry.roomsOf(result.newOwner.id)).find((r) => r.id === roomId));
+          announceRoom(await registry.roomSummary(roomId));
         }
       }
       return true;
@@ -263,7 +263,7 @@ export function createChatServer({
           await announceMembers(r.roomId);
           if (r.newOwner) {
             announceEvent(r.roomId, "owner", r.newOwner.nickname);
-            announceRoom((await registry.roomsOf(r.newOwner.id)).find((x) => x.id === r.roomId));
+            announceRoom(await registry.roomSummary(r.roomId));
           }
         } else {
           // alone in it and gone: the room (and its code) stays open for a minute, in case it was only the connection

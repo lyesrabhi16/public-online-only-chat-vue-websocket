@@ -178,6 +178,12 @@ export class Registry {
     return { id: room.id, name: room.name, code: room.code, members: room.members.size, locked: room.locked, ownerId: room.ownerId };
   }
 
+  /** One room as it is now, or null when it is gone. */
+  roomSummary(roomId) {
+    const room = this.rooms.get(roomId);
+    return room ? this.summary(room) : null;
+  }
+
   /** The rooms a person is in. There is no list of all the rooms: you can only get into one with its code. */
   roomsOf(connectionId) {
     const user = this.users.get(connectionId);

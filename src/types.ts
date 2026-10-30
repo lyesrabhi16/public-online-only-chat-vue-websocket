@@ -1,35 +1,58 @@
+import type { Key } from './i18n'
+
 /** A room you are in. Its code is what lets somebody else in. */
 export interface Room {
   id: string
   name: string
   code: string
+  members: number
+  locked: boolean
+  ownerId: string | null
 }
 
 export interface Member {
   id: string
   nickname: string
+  owner?: boolean
 }
 
-/** What the server relays: a message, and who is in a room. */
-export interface ServerMessage {
+export type MessageKind = 'text' | 'image' | 'audio'
+
+/** A message as the page shows it, once decrypted and checked. */
+export interface Msg {
   id: string
-  room: string
   from: Member
-  text: string
   at: string
+  mine: boolean
+  kind: MessageKind
+  text: string // the text, or the caption of a photo
+  src?: string // a photo or a voice message, as a data URL
+  w?: number
+  h?: number
+  ms?: number // length of a voice message
+  wave?: number[] // its loudness bars, 0 to 100
+  replyTo: string | null
+  edited: boolean
+  deleted: boolean
+  unreadable: boolean
+  reactions: Record<string, string[]> // emoji -> nicknames
+  proof?: string // lets the author edit or delete (only on your own messages)
+  whisperTo?: string // nickname of the only person who got it
 }
 
-/** What the screen shows: a message, or a line like "Ada joined". */
-export type Line =
-  | { kind: 'message'; id: string; from: Member; text: string; at: string; mine: boolean }
-  | { kind: 'event'; id: string; text: string; at: string }
+/** What the screen shows: a message, or a notice like "Ada joined" (kept as a key so it follows the language). */
+export type Line = { kind: 'message'; msg: Msg } | { kind: 'event'; id: string; at: string; key: Key; params: Record<string, string> }
 
 /** Everything about a room the person is in. It lives in memory only: leaving the room forgets it. */
 export interface JoinedRoom {
   room: Room
+  key: CryptoKey
   lines: Line[]
   members: Member[]
   typing: string[]
+  unread: number
+  mentioned: boolean
+  muted: string[] // lowercase nicknames whose messages you chose to hide
 }
 
 export type Status = 'connecting' | 'online' | 'offline'

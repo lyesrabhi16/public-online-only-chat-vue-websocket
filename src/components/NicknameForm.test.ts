@@ -12,8 +12,7 @@ describe('NicknameForm', () => {
   })
 
   it('shows the error the server gave', () => {
-    const wrapper = mount(NicknameForm, { props: { error: 'Already used' } })
-    expect(wrapper.find('[role=alert]').text()).toBe('Already used')
+    expect(mount(NicknameForm, { props: { error: 'Already used' } }).find('[role=alert]').text()).toBe('Already used')
   })
 
   it('does not submit twice while connecting', async () => {
@@ -23,8 +22,14 @@ describe('NicknameForm', () => {
     expect(wrapper.find('button').text()).toBe('Connecting…')
   })
 
-  it('says that nothing is saved', () => {
-    expect(mount(NicknameForm).text()).toContain('nothing is saved')
-    expect(mount(NicknameForm).text()).toContain('code')
+  it('says that nothing is saved, and that messages are encrypted', () => {
+    const text = mount(NicknameForm).text()
+    expect(text).toContain('nothing is saved')
+    expect(text).toContain('encrypted')
+  })
+
+  it('welcomes somebody who came with an invite link', () => {
+    const wrapper = mount(NicknameForm, { props: { invited: true } })
+    expect(wrapper.find('.invite-note').text()).toContain('invited')
   })
 })

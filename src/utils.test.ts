@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { colorFor, formatTime, groupCode, peopleLabel, typingLabel } from './utils'
+import { EMOJIS as SERVER_EMOJIS } from '../server/rooms.js'
+import { EMOJIS, clock, codeFromHash, colorFor, formatTime, groupCode, inviteLink, mentions, parseWhisper, peopleLabel, splitMentions, typingLabel } from './utils'
 
 describe('colorFor', () => {
   it('gives the same colour to the same name, whatever the case', () => {
@@ -48,5 +49,73 @@ describe('groupCode', () => {
 
   it('leaves anything else alone', () => {
     expect(groupCode('abc')).toBe('abc')
+  })
+})
+
+describe('mentions', () => {
+  const names = ['Ada', 'Ada Lovelace', 'Bob']
+
+  it('cuts a message into text and @mentions, preferring the longest nickname', () => {
+    expect(splitMentions('hi @Ada Lovelace and @bob!', names)).toEqual([
+      { text: 'hi ' },
+      { text: '@Ada Lovelace', mention: 'Ada Lovelace' },
+      { text: ' and ' },
+      { text: '@bob', mention: 'Bob' },
+      { text: '!' },
+    ])
+  })
+
+  it('does not cut a word that merely starts like a nickname', () => {
+    expect(splitMentions('@Adam is here', ['Ada'])).toEqual([{ text: '@Adam is here' }])
+  })
+
+  it('leaves a message without @ alone, and survives special characters in nicknames', () => {
+    expect(splitMentions('nothing', names)).toEqual([{ text: 'nothing' }])
+    expect(splitMentions('hi @a.b+c (d)', ['a.b+c (d)'])[1].mention).toBe('a.b+c (d)')
+  })
+
+  it('knows when you are mentioned', () => {
+    expect(mentions('hello @ada', 'Ada')).toBe(true)
+    expect(mentions('hello Ada', 'Ada')).toBe(false)
+  })
+})
+
+describe('whispers', () => {
+  const names = ['Ada', 'Ada Lovelace', 'Bob']
+
+  it('reads /w Nickname message, with the longest matching nickname', () => {
+    expect(parseWhisper('/w Bob psst, listen', names)).toEqual({ to: 'Bob', text: 'psst, listen' })
+    expect(parseWhisper('/w Ada Lovelace hello', names)).toEqual({ to: 'Ada Lovelace', text: 'hello' })
+    expect(parseWhisper('/whisper ada hi', names)).toEqual({ to: 'Ada', text: 'hi' })
+  })
+
+  it('is not a whisper without a message, or for somebody who is not here, or for a normal message', () => {
+    expect(parseWhisper('/w Bob', names)).toBeNull()
+    expect(parseWhisper('/w Eve hi', names)).toBeNull()
+    expect(parseWhisper('w Bob hi', names)).toBeNull()
+    expect(parseWhisper('hello /w Bob hi', names)).toBeNull()
+  })
+})
+
+describe('invite links', () => {
+  it('carry the code after the #, in capitals', () => {
+    expect(inviteLink('K7M2QX', 'https://chat.example/')).toBe('https://chat.example/#/join/K7M2QX')
+    expect(codeFromHash('#/join/k7m2qx')).toBe('K7M2QX')
+  })
+
+  it('are ignored when they are not an invite', () => {
+    for (const hash of ['', '#', '#/join/', '#/join/K7M2Q', '#/join/K7M2QX/extra', '#/other/K7M2QX']) expect(codeFromHash(hash), hash).toBeNull()
+  })
+})
+
+describe('small helpers', () => {
+  it('format a length of time', () => {
+    expect(clock(0)).toBe('0:00')
+    expect(clock(4200)).toBe('0:04')
+    expect(clock(83_000)).toBe('1:23')
+  })
+
+  it('offer exactly the reactions the server accepts', () => {
+    expect(EMOJIS).toEqual(SERVER_EMOJIS)
   })
 })
