@@ -80,6 +80,23 @@ export function createChatServer({
   const announceEvent = (roomId, kind, nickname) => io.to(key(roomId)).emit("room:event", { room: roomId, kind, nickname, at: new Date().toISOString() });
   const announceRoom = (room) => room && io.to(key(room.id)).emit("room:updated", { room });
 
+  /** Tells the rooms that somebody is gone (they disconnected, or their server died). */
+  const afterLeaving = async (user, left) => {
+    for (const r of left) {
+      if (!r.emptied) {
+        announceEvent(r.roomId, "leave", user.nickname);
+        await announceMembers(r.roomId);
+        if (r.newOwner) {
+          announceEvent(r.roomId, "owner", r.newOwner.nickname);
+          announceRoom(await registry.roomSummary(r.roomId));
+        }
+      } else {
+        // alone in it and gone: the room (and its code) stays open for a minute, in case it was only the connection
+        setTimeout(() => registry.closeIfEmpty(r.roomId), GRACE_MS).unref();
+      }
+    }
+  };
+
   io.on("connection", (socket) => {
     const texts = new RateLimiter();
     const media = new RateLimiter(LIMITS.mediaBurst, LIMITS.mediaWindowMs);
@@ -109,7 +126,7 @@ export function createChatServer({
     socket.on("hello", async (data, ack) => {
       const { user, error, code, params } = await registry.register(socket.id, payload(data).nickname);
       if (error) return refuse(ack, { error, code, params });
-      reply(ack, { ok: true, user: { id: user.id, nickname: user.nickname } });
+      reply(ack, { ok: true, user: { id: user.id, nickname: user.nickname }, instance: instanceId });
     });
 
     // A new room: its creator is inside it and runs it, and gets its code, to share with whoever should come in.
@@ -256,20 +273,7 @@ export function createChatServer({
 
     socket.on("disconnect", async () => {
       const { user, left } = await registry.unregister(socket.id);
-      if (!user) return;
-      for (const r of left) {
-        if (!r.emptied) {
-          announceEvent(r.roomId, "leave", user.nickname);
-          await announceMembers(r.roomId);
-          if (r.newOwner) {
-            announceEvent(r.roomId, "owner", r.newOwner.nickname);
-            announceRoom(await registry.roomSummary(r.roomId));
-          }
-        } else {
-          // alone in it and gone: the room (and its code) stays open for a minute, in case it was only the connection
-          setTimeout(() => registry.closeIfEmpty(r.roomId), GRACE_MS).unref();
-        }
-      }
+      if (user) await afterLeaving(user, left);
     });
   });
 
@@ -278,6 +282,10 @@ export function createChatServer({
     registry,
     server,
     instanceId,
+    /** What a janitor found when it cleaned up after a server that died: the rooms are told as for any other departure. */
+    announceReaped: async (reaped) => {
+      for (const { user, left } of reaped) await afterLeaving(user, left);
+    },
     /** Starts listening (port 0 picks a free one) and answers with the port. */
     listen: (port = 3000) => new Promise((resolve) => server.listen(port, () => resolve(server.address().port))),
     close: () => new Promise((resolve) => io.close(() => resolve())),

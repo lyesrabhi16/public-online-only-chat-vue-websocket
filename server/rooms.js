@@ -33,8 +33,27 @@ const NICKNAME = /^[\p{L}\p{N}][\p{L}\p{N} ._-]*$/u;
 const CONTROL = /[\u0000-\u001f\u007f]/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/** The English sentence of each refusal that the registry can make (the page has its own translations, by code). */
+export const SENTENCES = {
+  nickname_required: () => "Choose a nickname.",
+  already_registered: () => "You already chose a nickname.",
+  nickname_taken: (p) => `"${p.nickname}" is already used by someone online. Pick another nickname.`,
+  too_many_rooms: () => "There are too many rooms right now. Try again later.",
+  rooms_per_user: (p) => `You can be in ${p.max} rooms at a time.`,
+  code_unavailable: () => "Could not make a code. Try again.",
+  code_invalid: () => "That is not a room code. A code has 6 letters and digits.",
+  code_unknown: () => "No room has this code. A room closes when everyone has left it.",
+  banned: () => "You were removed from this room.",
+  locked: () => "This room is locked: nobody new can come in.",
+  room_full: () => "This room is full.",
+  not_member: () => "Join the room first.",
+  not_owner: () => "Only the person who runs the room can do this.",
+  cannot_kick_self: () => "You cannot remove yourself: leave the room instead.",
+  unknown_target: () => "This person is not in the room.",
+};
+
 /** A refusal: a sentence for people, a stable code for programs, and the numbers or names the sentence mentions. */
-export const refusal = (code, error, params = {}) => ({ error, code, params });
+export const refusal = (code, error, params = {}) => ({ error: error ?? SENTENCES[code]?.(params) ?? code, code, params });
 
 // Each cleaner returns { value } or a refusal.
 export function cleanNickname(raw) {
@@ -170,7 +189,7 @@ export class Registry {
     if (!user) return { user: null, left: [] };
     const left = [...user.rooms].map((roomId) => this.leave(connectionId, roomId, { keepOpen: true })).filter((r) => r.left);
     this.users.delete(connectionId);
-    return { user, left };
+    return { user: { id: user.id, nickname: user.nickname }, left };
   }
 
   // ---- rooms
