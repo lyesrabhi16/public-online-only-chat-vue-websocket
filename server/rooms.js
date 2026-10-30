@@ -78,7 +78,7 @@ export function cleanRoomName(raw) {
 
 /**
  * What a message carries is encrypted by the page with a key the server never sees (see src/crypto.ts), so the server
- * cannot read it, only measure it. Short bodies are text and long ones are photos or voice messages; each kind has its own size limit and rate limit.
+ * does not need to read it, only measure it (it does receive the room code, so this is not protection against the server itself). Short bodies are text and long ones are photos or voice messages; each kind has its own size limit and rate limit.
  */
 export function classifyBody(raw, { textOnly = false } = {}) {
   if (typeof raw !== "string" || raw.length === 0) return refusal("body_required", "A message cannot be empty.");

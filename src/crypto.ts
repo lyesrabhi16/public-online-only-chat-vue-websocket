@@ -1,5 +1,6 @@
 // What people write is encrypted in their browser before it leaves, with a key made from the room code, and decrypted by the
-// others in the room. The server only relays the encrypted text and never has the key.
+// others in the room. The server relays the encrypted text. It does see the room code (it needs it to find the room), so it could derive the key:
+// this keeps messages from anybody who sees them without the code, not from the operator of the server.
 //
 // An honest limit: a room code has 6 characters (about 30 bits), so it is a password, not a strong key. The encryption keeps
 // messages unreadable to anybody who does not have the code (network logs, a curious server operator who does not try to

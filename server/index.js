@@ -1,6 +1,6 @@
 // The Socket.IO server. A room is entered with its code. It relays messages between the people in a room and keeps no history at all:
 // a person who joins late (or reconnects) sees nothing of what was said before.
-// What people write is encrypted by their pages with a key made from the room code, so this server only relays it and measures it.
+// What people write is encrypted by their pages with a key made from the room code, so this server relays it and measures it (it does see the room code, from which the key is made: see README, "Encryption").
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";

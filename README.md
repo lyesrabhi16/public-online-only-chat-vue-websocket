@@ -23,9 +23,14 @@ More: [recording a voice message](docs/screenshots/recording.png) · [unread cou
 
 ## Encryption, and its limit
 
-Every message body (text, photo, voice message, edit, whisper) is encrypted in the sender's browser with AES-GCM before it leaves, with a key made from the room code (PBKDF2, 310,000 iterations), and decrypted by the others in the room. The server only relays the encrypted text and measures its size: it cannot read it, and nor can anybody who watches the network or the server's logs.
+Every message body (text, photo, voice message, edit, whisper) is encrypted in the sender's browser with AES-GCM before it leaves, with a key made from the room code (PBKDF2, 310,000 iterations), and decrypted by the others in the room. The server relays the encrypted text and measures its size, and does not store it.
 
-**The honest limit:** a code has 6 characters, about 30 bits. It is a password, not a strong key. Whoever records the encrypted traffic *and* then tries every possible code offline could read it (about 9 hours for the whole space on one very fast graphics card, at 10 billion PBKDF2 iterations a second). Making a new code changes the key. For secrecy against a determined attacker you would add a long secret to the invite link (after the `#`) that is never sent anywhere; the server's other protections (below) are about who can *get in*, not about this.
+**What this does and does not protect against.** The server **receives the room code in clear** when somebody creates or joins a room (it needs it to find the room), and the key is made from that code. So:
+
+- **Protected**: somebody who sees the encrypted messages *without* the code (a copy of the network traffic, logs or a capture of what travels through Redis) cannot read them without guessing the code offline. A code has 6 characters, about 30 bits: that is a password, not a strong key, and the whole space can be tried in about 9 hours on one very fast graphics card (10 billion PBKDF2 iterations a second). Making a new code changes the key.
+- **Not protected**: **the operator of the server**, or anybody who takes control of it, sees the code and can derive the key. This is not end-to-end encryption against the server.
+
+The fix is to stop the key from depending on anything the server sees (a long secret in the invite link, after the `#`, or a password-authenticated key exchange with a part of the code the server never receives). The server's other protections (below) are about who can *get in*, not about this.
 
 Photos and voice messages are checked by the page that receives them (an image must be a JPEG, PNG or WebP data URL, never an SVG or a script; audio must be a known kind): anything else is shown as "this message could not be read".
 
@@ -93,7 +98,7 @@ Everything the client sends is untrusted, so the server checks it (see `server/r
 | wrong codes | 10 per address every 5 minutes, then even the right code is refused until the window passes: two guesses a minute against a billion codes. The limit is shared by all servers; behind a proxy set `TRUST_PROXY=1` so that each visitor has their own |
 | nickname | 2 to 20 letters, digits, spaces, `.`, `_`, `-`; unique among people online (across servers) |
 | room name | 2 to 30 characters; two rooms can share a name, their codes tell them apart; at most 200 rooms |
-| message | the server cannot read it, so it measures it: up to 6,000 characters of encrypted text (500 characters), or 450 KB for a photo or voice message. Text: 5 per 5 seconds per connection; photos and voice: 3 per 10 seconds |
+| message | the server measures it (it does not need to read it): up to 6,000 characters of encrypted text (500 characters), or 450 KB for a photo or voice message. Text: 5 per 5 seconds per connection; photos and voice: 3 per 10 seconds |
 | edit and delete | only the author: the server gives the sender a signed **proof** with each message (never relayed to others); edit and delete must present it |
 | reactions, whispers | reactions from the fixed list only; a whisper only to somebody who is in the room |
 | room | at most 200 people; one person can be in at most 10 rooms; only the owner locks, removes or changes the code |
