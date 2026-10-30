@@ -1,6 +1,6 @@
 // The chat store against the real server, with real sockets and real encryption (MLS between the pages, Argon2 at the lowest cost).
 import { io as connect } from 'socket.io-client'
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { createChatServer } from '../../server/index.js'
 import { deriveSecrets, prove, toBase64, type Secrets } from '../crypto'
 import { locale } from '../i18n'
@@ -19,6 +19,7 @@ beforeAll(async () => {
   url = `http://localhost:${await server.listen(0)}`
 })
 afterEach(() => {
+  vi.unstubAllGlobals()
   locale.value = 'en'
   while (chats.length) chats.pop()!.logout()
   while (raw.length) raw.pop()!.close()
@@ -554,6 +555,143 @@ describe('the group encryption', () => {
     await until(() => (server.registry as unknown as { rooms: Map<string, { members: Set<string> }> }).rooms.get(made.room.id)!.members.size === 1)
   })
 
+})
+
+/** An audio output that only notes which notes were played, so that a test can hear what the page would play. */
+function listen() {
+  const notes: number[] = []
+  class FakeAudioContext {
+    currentTime = 0
+    destination = {}
+    createOscillator() {
+      const frequency = { set value(v: number) { notes.push(v) } }
+      return { frequency, connect: (node: unknown) => node, start() {}, stop() {} }
+    }
+    createGain() {
+      return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }
+    }
+  }
+  vi.stubGlobal('AudioContext', FakeAudioContext)
+  return notes
+}
+const CHIME = [660, 990]
+const BEEP = [880]
+
+describe('being mentioned', () => {
+  it('plays a chime of its own when you are mentioned in the room you are looking at, and nothing for a plain message', async () => {
+    const heard = listen()
+    const [ada, bob] = [await person('Ada M1'), await person('Bob M1')]
+    const room = await roomWith('Mentions M1', ada, bob)
+    expect(ada.state.settings).toMatchObject({ mentionSound: true, sound: false }) // the chime is on by default, the beep for every message is not
+    await bob.send('just a message')
+    await arrived(ada, room.id, 'just a message')
+    expect(heard).toEqual([])
+    await bob.send('hello @Ada M1, are you there?')
+    await arrived(ada, room.id, 'hello @Ada M1, are you there?')
+    expect(heard).toEqual(CHIME)
+    expect(ada.state.joined[room.id]).toMatchObject({ unread: 0, mentioned: false }) // you are looking at it
+  })
+
+  it('treats @all as a mention of everybody: the chime, the unread mark, in any case', async () => {
+    const heard = listen()
+    const [ada, bob, cleo] = [await person('Ada M2'), await person('Bob M2'), await person('Cleo M2')]
+    const room = await roomWith('Everyone M2', ada, bob, cleo)
+    const other = await roomWith('Elsewhere M2', ada, bob, cleo)
+    ada.open(room.id)
+    cleo.open(other.id) // Cleo is looking at the other room
+    bob.open(room.id)
+    await bob.send('@ALL lunch is ready')
+    await arrived(ada, room.id, '@ALL lunch is ready')
+    await until(() => cleo.state.joined[room.id].mentioned)
+    expect(cleo.state.joined[room.id]).toMatchObject({ unread: 1, mentioned: true })
+    expect(heard).toEqual([...CHIME, ...CHIME]) // Ada and Cleo each heard it; Bob wrote it and heard nothing
+    expect(messages(bob, room.id).at(-1)!.mine).toBe(true)
+  })
+
+  it('does not take a word like "@allison" for a mention of everybody', async () => {
+    const heard = listen()
+    const [ada, bob] = [await person('Ada M3'), await person('Bob M3')]
+    const room = await roomWith('Names M3', ada, bob)
+    await bob.send('ask @allison about it')
+    await arrived(ada, room.id, 'ask @allison about it')
+    expect(heard).toEqual([])
+  })
+
+  it('is silent when you turned the chime off, and plays the plain beep instead if you asked for a sound on every message', async () => {
+    const heard = listen()
+    const [ada, bob] = [await person('Ada M4'), await person('Bob M4')]
+    const room = await roomWith('Quiet M4', ada, bob)
+    ada.setMentionSound(false)
+    expect(heard).toEqual([]) // turning it off makes no sound
+    await bob.send('@Ada M4 quiet please')
+    await arrived(ada, room.id, '@Ada M4 quiet please')
+    expect(heard).toEqual([])
+    ada.setSound(true)
+    expect(heard).toEqual(BEEP) // turning it on lets you hear what it is
+    heard.length = 0
+    await bob.send('@Ada M4 now with the beep')
+    await arrived(ada, room.id, '@Ada M4 now with the beep')
+    expect(heard).toEqual(BEEP)
+  })
+
+  it('lets you hear the chime when you turn it on', async () => {
+    const heard = listen()
+    const ada = await person('Ada M5')
+    ada.setMentionSound(true)
+    expect(heard).toEqual(CHIME)
+  })
+
+  it('beeps for a plain message in another room only if you asked for it, and chimes for a mention there as well', async () => {
+    const heard = listen()
+    const [ada, bob] = [await person('Ada M6'), await person('Bob M6')]
+    const one = await roomWith('One M6', ada, bob)
+    const two = await roomWith('Two M6', ada, bob) // Ada is looking at this one
+    ada.open(two.id)
+    await bob.send('quiet') // goes to the room Bob is looking at, which is the second one
+    bob.open(one.id)
+    await bob.send('plain, in the other room')
+    await until(() => ada.state.joined[one.id].unread === 1)
+    expect(heard).toEqual([])
+    ada.setSound(true)
+    heard.length = 0
+    await bob.send('another plain one')
+    await until(() => ada.state.joined[one.id].unread === 2)
+    expect(heard).toEqual(BEEP)
+    heard.length = 0
+    await bob.send('@Ada M6 over here')
+    await until(() => ada.state.joined[one.id].unread === 3)
+    expect(heard).toEqual(CHIME) // a mention has its own sound, even with the beep on
+    expect(ada.state.joined[one.id].mentioned).toBe(true)
+  })
+
+  it('makes no sound for somebody you muted', async () => {
+    const heard = listen()
+    const [ada, bob] = [await person('Ada M7'), await person('Bob M7')]
+    const room = await roomWith('Muted M7', ada, bob)
+    ada.open(room.id)
+    ada.toggleMute('Bob M7')
+    await bob.send('@Ada M7 @all psst')
+    await arrived(ada, room.id, '@Ada M7 @all psst')
+    expect(heard).toEqual([])
+    expect(ada.state.joined[room.id].mentioned).toBe(false)
+  })
+
+  it('keeps working in a browser that has no audio at all', async () => {
+    vi.stubGlobal('AudioContext', undefined)
+    const [ada, bob] = [await person('Ada M8'), await person('Bob M8')]
+    const room = await roomWith('Silent M8', ada, bob)
+    await bob.send('@Ada M8 can you hear me?')
+    await arrived(ada, room.id, '@Ada M8 can you hear me?')
+    expect(() => ada.setMentionSound(true)).not.toThrow()
+  })
+
+  it('refuses "all" as a nickname, since it mentions everybody', async () => {
+    const chat = createChat(url, connect, null, { cost: cheap })
+    chats.push(chat)
+    expect(await chat.login('All')).toMatch(/to mention everybody/)
+    locale.value = 'fr'
+    expect(await chat.login('ALL')).toMatch(/mentionner tout le monde/)
+  })
 })
 
 /** A socket that only does what a test tells it to: events arrive when the test says so. */

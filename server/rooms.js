@@ -28,6 +28,7 @@ export const LIMITS = {
 export const EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🎉"];
 
 const NICKNAME = /^[\p{L}\p{N}][\p{L}\p{N} ._-]*$/u;
+const RESERVED = new Set(["all"]); // "@all" mentions everybody in a room
 const CONTROL = /[\u0000-\u001f\u007f]/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -63,6 +64,7 @@ export function cleanNickname(raw) {
     return refusal("nickname_length", `A nickname has ${LIMITS.nicknameMin} to ${LIMITS.nicknameMax} characters.`, { min: LIMITS.nicknameMin, max: LIMITS.nicknameMax });
   }
   if (!NICKNAME.test(value)) return refusal("nickname_chars", "A nickname can only contain letters, digits, spaces, dots, dashes and underscores.");
+  if (RESERVED.has(value.toLowerCase())) return refusal("nickname_reserved", `"${value}" is used to mention everybody in a room. Pick another nickname.`, { nickname: value });
   return { value };
 }
 

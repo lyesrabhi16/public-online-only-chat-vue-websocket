@@ -48,6 +48,12 @@ describe('MessageItem', () => {
     expect(marks[1].classes()).not.toContain('self')
   })
 
+  it('highlights @all as a mention of you, whoever you are', () => {
+    const marks = make(msg({ text: '@all meeting at ten' })).findAll('.mention')
+    expect(marks.map((m) => m.text())).toEqual(['@all'])
+    expect(marks[0].classes()).toContain('self')
+  })
+
   it('shows a photo that opens full size on a click', async () => {
     const src = 'data:image/jpeg;base64,/9j/4AAQ'
     const wrapper = make(msg({ kind: 'image', src, w: 800, h: 600, text: '' }))

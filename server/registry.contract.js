@@ -40,6 +40,11 @@ export function registryContract(label, make) {
       expect((await r.register("b", "Ada")).user).toBeTruthy();
     });
 
+    test("does not give \"all\" as a nickname: it mentions everybody", async (r) => {
+      expect((await r.register("a", "ALL")).code).toBe("nickname_reserved");
+      expect((await r.register("a", "Allan")).user).toBeTruthy();
+    });
+
     test("knows who is who", async (r) => {
       await person(r, "a", "  Ada   Lovelace ");
       expect(await r.user("a")).toMatchObject({ id: "a", nickname: "Ada Lovelace" });

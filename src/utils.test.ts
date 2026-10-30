@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { EMOJIS as SERVER_EMOJIS } from '../server/rooms.js'
-import { EMOJIS, clock, codeFromHash, colorFor, formatTime, groupCode, inviteLink, mentions, parseWhisper, peopleLabel, splitMentions, typingLabel } from './utils'
+import { EMOJIS, clock, codeFromHash, colorFor, formatTime, groupCode, inviteLink, mentionCandidates, mentionQuery, mentions, mentionsEveryone, parseWhisper, peopleLabel, splitMentions, typingLabel } from './utils'
 
 describe('colorFor', () => {
   it('gives the same colour to the same name, whatever the case', () => {
@@ -78,6 +78,64 @@ describe('mentions', () => {
   it('knows when you are mentioned', () => {
     expect(mentions('hello @ada', 'Ada')).toBe(true)
     expect(mentions('hello Ada', 'Ada')).toBe(false)
+  })
+
+  it('reads @all as a mention of everybody, in any case', () => {
+    expect(splitMentions('hey @all, and @ALL!', names)).toEqual([
+      { text: 'hey ' },
+      { text: '@all', all: true },
+      { text: ', and ' },
+      { text: '@ALL', all: true },
+      { text: '!' },
+    ])
+    expect(splitMentions('@all', [])).toEqual([{ text: '@all', all: true }])
+    expect(mentions('@all please read', 'Bob')).toBe(true)
+    expect(mentionsEveryone('@all please read')).toBe(true)
+    expect(mentionsEveryone('@bob please read')).toBe(false)
+  })
+
+  it('does not take a word that merely starts with "all", or an @ inside a word', () => {
+    expect(mentionsEveryone('@allison and @allow')).toBe(false)
+    expect(splitMentions('@Allan', ['Allan'])).toEqual([{ text: '@Allan', mention: 'Allan' }]) // a nickname that starts like "all" is still a person
+    expect(mentionsEveryone('write to me@all.com')).toBe(false)
+    expect(mentions('mail ada@Ada.com', 'Ada')).toBe(false)
+    expect(mentionsEveryone('(@all)')).toBe(true) // punctuation around it is fine
+  })
+})
+
+describe('typing a mention', () => {
+  it('finds the @ before the caret, and what has been typed after it', () => {
+    expect(mentionQuery('hello @', 7)).toEqual({ start: 6, query: '' })
+    expect(mentionQuery('hello @bo', 9)).toEqual({ start: 6, query: 'bo' })
+    expect(mentionQuery('@Ada Lov', 8)).toEqual({ start: 0, query: 'Ada Lov' }) // a nickname can have spaces
+    expect(mentionQuery('hi @bob and then @', 18)).toEqual({ start: 17, query: '' })
+  })
+
+  it('only looks before the caret', () => {
+    expect(mentionQuery('hello @bo and more', 9)).toEqual({ start: 6, query: 'bo' })
+    expect(mentionQuery('hello @bo and more', 5)).toBeNull()
+  })
+
+  it('finds nothing when there is no @ being typed', () => {
+    expect(mentionQuery('hello', 5)).toBeNull()
+    expect(mentionQuery('me@all', 6)).toBeNull() // inside a word
+    expect(mentionQuery('@x'.repeat(2) + ' ' + 'y'.repeat(30), 35)).toBeNull()
+    expect(mentionQuery('@ada!', 5)).toBeNull() // "!" cannot be part of a nickname
+  })
+
+  it('offers "all" first, then the names that start with what was typed', () => {
+    const names = ['Bob', 'Ada', 'Ada Lovelace', 'Cleo']
+    expect(mentionCandidates('', names)).toEqual(['all', 'Ada', 'Ada Lovelace', 'Bob', 'Cleo'])
+    expect(mentionCandidates('a', names)).toEqual(['all', 'Ada', 'Ada Lovelace'])
+    expect(mentionCandidates('ADA L', names)).toEqual(['Ada Lovelace'])
+    expect(mentionCandidates('bo', names)).toEqual(['Bob'])
+    expect(mentionCandidates('al', names)).toEqual(['all'])
+  })
+
+  it('offers nothing once what was typed cannot be a name any more', () => {
+    expect(mentionCandidates('zz', ['Ada'])).toEqual([])
+    expect(mentionCandidates('Ada can you', ['Ada'])).toEqual([])
+    expect(mentionCandidates('', [])).toEqual(['all'])
   })
 })
 

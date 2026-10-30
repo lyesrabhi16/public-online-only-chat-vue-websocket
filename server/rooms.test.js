@@ -8,6 +8,12 @@ describe("nicknames and room names", () => {
     expect(cleanNickname("Élodie_42").value).toBe("Élodie_42");
   });
 
+  it("\"all\" is kept for mentioning everybody, whatever the case", () => {
+    for (const reserved of ["all", "ALL", " All "]) expect(cleanNickname(reserved)).toMatchObject({ code: "nickname_reserved", params: { nickname: reserved.trim() } });
+    expect(cleanNickname("Allan").value).toBe("Allan");
+    expect(cleanNickname("all ears").value).toBe("all ears");
+  });
+
   it.each([["a"], ["x".repeat(21)], ["  "], ["<script>"], ["-dash first"], [42], [null], [{ a: 1 }]])("refuse the nickname %j, with a code", (raw) => {
     const result = cleanNickname(raw);
     expect(result.error).toBeTruthy();
