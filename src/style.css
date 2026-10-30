@@ -603,7 +603,7 @@ input.code {
 }
 
 .message.gone .text {
-  color: var(--muted);
+  opacity: 0.75; /* readable on both your bubble and the others' */
 }
 
 .whisper-label {
@@ -629,7 +629,7 @@ input.code {
   font-weight: 600;
 }
 
-.mention.me {
+.mention.self {
   background: color-mix(in srgb, #f59e0b 45%, transparent);
 }
 

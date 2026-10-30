@@ -44,8 +44,8 @@ describe('MessageItem', () => {
     const wrapper = make(msg({ text: 'hi @Bob and @Ada' }))
     const marks = wrapper.findAll('.mention')
     expect(marks.map((m) => m.text())).toEqual(['@Bob', '@Ada'])
-    expect(marks[0].classes()).toContain('me')
-    expect(marks[1].classes()).not.toContain('me')
+    expect(marks[0].classes()).toContain('self')
+    expect(marks[1].classes()).not.toContain('self')
   })
 
   it('shows a photo that opens full size on a click', async () => {

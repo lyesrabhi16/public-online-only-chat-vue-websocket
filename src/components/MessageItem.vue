@@ -79,7 +79,7 @@ onBeforeUnmount(() => sound?.pause())
       </div>
       <span v-if="msg.kind === 'text' || msg.text" class="text"
         ><template v-for="(s, i) in segments" :key="i"
-          ><span v-if="s.mention" class="mention" :class="{ me: s.mention.toLowerCase() === me.toLowerCase() }">{{ s.text }}</span
+          ><span v-if="s.mention" class="mention" :class="{ self: s.mention.toLowerCase() === me.toLowerCase() }">{{ s.text }}</span
           ><template v-else>{{ s.text }}</template></template
         ></span
       >
