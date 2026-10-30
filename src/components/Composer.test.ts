@@ -177,6 +177,23 @@ describe('Composer: mentions', () => {
     expect((input.element as HTMLInputElement).value).toBe('ask @Bob about it')
   })
 
+  it('replaces the whole name when the caret is inside one that is already typed, instead of repeating its end', async () => {
+    const wrapper = make({ nicknames: people })
+    const input = box(wrapper)
+    await input.setValue('ask @Ada Lovelace about it')
+    ;(input.element as HTMLInputElement).setSelectionRange(7, 7) // "@Ad|a Lovelace"
+    await input.trigger('keyup')
+    expect(names(wrapper)).toEqual(['Ada', 'Ada Lovelace'])
+    await input.trigger('keydown', { key: 'ArrowDown' })
+    await input.trigger('keydown', { key: 'Enter' })
+    expect((input.element as HTMLInputElement).value).toBe('ask @Ada Lovelace about it')
+    await input.setValue('ask @Ada Lovelace about it')
+    ;(input.element as HTMLInputElement).setSelectionRange(7, 7)
+    await input.trigger('keyup')
+    await input.trigger('keydown', { key: 'Enter' }) // "Ada": the whole old mention is replaced
+    expect((input.element as HTMLInputElement).value).toBe('ask @Ada about it')
+  })
+
   it('closes with Escape until the next keystroke, and then Enter sends', async () => {
     const wrapper = make({ nicknames: people })
     await type(wrapper, '@bo')
@@ -201,7 +218,27 @@ describe('Composer: mentions', () => {
     await input.setValue(long)
     ;(input.element as HTMLInputElement).setSelectionRange(long.length, long.length)
     await input.trigger('keyup')
-    await input.trigger('keydown', { key: 'Enter' })
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', cancelable: true })
+    input.element.dispatchEvent(enter)
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', cancelable: true })
+    input.element.dispatchEvent(tab)
     expect((input.element as HTMLInputElement).value).toBe(long)
+    expect(enter.defaultPrevented).toBe(false) // nothing was filled in, so Enter still sends and Tab still moves on
+    expect(tab.defaultPrevented).toBe(false)
+  })
+
+  it('keeps the focus in the box when a name is picked with the mouse', async () => {
+    const wrapper = mount(Composer, { props: { replyTo: null, editing: null, nicknames: people }, attachTo: document.body })
+    const input = box(wrapper)
+    ;(input.element as HTMLInputElement).focus()
+    await input.setValue('@')
+    ;(input.element as HTMLInputElement).setSelectionRange(1, 1)
+    await input.trigger('keyup')
+    ;(document.activeElement as HTMLElement | null)?.blur() // what a click on the list would do, if the page did not stop it
+    wrapper.find('[role=option]').element.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+    await wrapper.vm.$nextTick()
+    await wrapper.vm.$nextTick()
+    expect(document.activeElement).toBe(input.element)
+    wrapper.unmount()
   })
 })

@@ -3,7 +3,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { t } from '../i18n'
 import { MAX_VOICE_MS, preparePhoto, VoiceRecorder, type Photo, type Voice } from '../media'
 import type { Msg } from '../types'
-import { MENTION_ALL, clock, colorFor, mentionCandidates, mentionQuery } from '../utils'
+import { MENTION_ALL, clock, colorFor, mentionCandidates, mentionEnd, mentionQuery } from '../utils'
 import WaveBars from './WaveBars.vue'
 
 const props = defineProps<{ replyTo: Msg | null; editing: Msg | null; nicknames?: string[] }>()
@@ -41,14 +41,14 @@ watch(options, () => (choice.value = 0))
 
 const syncCaret = () => (caret.value = input.value?.selectionStart ?? text.value.length)
 
-/** Puts "@name " where the "@" was typed. */
-const pick = (name: string) => {
+/** Puts "@name " where the "@" was typed, in place of the whole mention when the caret is inside one. Answers whether it did (it does not when the message would get too long). */
+const pick = (name: string): boolean => {
   const typing = mention.value
-  if (!typing) return
+  if (!typing) return false
   const before = text.value.slice(0, typing.start)
-  const after = text.value.slice(caret.value)
+  const after = text.value.slice(mentionEnd(text.value, typing.start, caret.value, props.nicknames ?? []))
   const inserted = `@${name}${after.startsWith(' ') ? '' : ' '}`
-  if (before.length + inserted.length + after.length > MAX_LENGTH) return
+  if (before.length + inserted.length + after.length > MAX_LENGTH) return false
   text.value = before + inserted + after
   caret.value = before.length + inserted.length + (after.startsWith(' ') ? 1 : 0)
   dismissed.value = true
@@ -56,6 +56,7 @@ const pick = (name: string) => {
     input.value?.focus()
     input.value?.setSelectionRange(caret.value, caret.value)
   })
+  return true
 }
 
 const onKeydown = (e: KeyboardEvent) => {
@@ -63,8 +64,9 @@ const onKeydown = (e: KeyboardEvent) => {
   const last = options.value.length - 1
   if (e.key === 'ArrowDown') choice.value = choice.value >= last ? 0 : choice.value + 1
   else if (e.key === 'ArrowUp') choice.value = choice.value <= 0 ? last : choice.value - 1
-  else if (e.key === 'Enter' || e.key === 'Tab') pick(options.value[choice.value])
-  else if (e.key === 'Escape') dismissed.value = true
+  else if (e.key === 'Enter' || e.key === 'Tab') {
+    if (!pick(options.value[choice.value])) return // nothing was filled in: Enter still sends and Tab still moves on
+  } else if (e.key === 'Escape') dismissed.value = true
   else return
   e.preventDefault()
 }

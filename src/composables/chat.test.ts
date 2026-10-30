@@ -617,7 +617,7 @@ describe('being mentioned', () => {
     expect(heard).toEqual([])
   })
 
-  it('is silent when you turned the chime off, and plays the plain beep instead if you asked for a sound on every message', async () => {
+  it('is silent when you turned the chime off, even with the beep on, for a message you are looking at', async () => {
     const heard = listen()
     const [ada, bob] = [await person('Ada M4'), await person('Bob M4')]
     const room = await roomWith('Quiet M4', ada, bob)
@@ -631,7 +631,7 @@ describe('being mentioned', () => {
     heard.length = 0
     await bob.send('@Ada M4 now with the beep')
     await arrived(ada, room.id, '@Ada M4 now with the beep')
-    expect(heard).toEqual(BEEP)
+    expect(heard).toEqual([]) // the beep is for what you are not looking at
   })
 
   it('lets you hear the chime when you turn it on', async () => {
@@ -662,6 +662,89 @@ describe('being mentioned', () => {
     await until(() => ada.state.joined[one.id].unread === 3)
     expect(heard).toEqual(CHIME) // a mention has its own sound, even with the beep on
     expect(ada.state.joined[one.id].mentioned).toBe(true)
+    ada.setMentionSound(false)
+    heard.length = 0
+    await bob.send('@Ada M6 and again, with the chime off')
+    await until(() => ada.state.joined[one.id].unread === 4)
+    expect(heard).toEqual(BEEP) // away from the room, the beep covers it
+  })
+
+  it('does not make a whisper a mention of everybody: only your name in it counts', async () => {
+    const heard = listen()
+    const [ada, bob] = [await person('Ada M9'), await person('Bob M9')]
+    const one = await roomWith('One M9', ada, bob)
+    const two = await roomWith('Two M9', ada, bob)
+    ada.open(two.id) // Ada is looking at the second room
+    bob.open(one.id)
+    await bob.send('/w Ada M9 @all psst')
+    await until(() => ada.state.joined[one.id].unread === 1)
+    expect(ada.state.joined[one.id].mentioned).toBe(false)
+    expect(heard).toEqual([])
+    await bob.send('/w Ada M9 @Ada M9 psst, you in particular')
+    await until(() => ada.state.joined[one.id].unread === 2)
+    expect(ada.state.joined[one.id].mentioned).toBe(true)
+    expect(heard).toEqual(CHIME)
+  })
+
+  it('reads a nickname that starts like "all" as that person, for everybody', async () => {
+    const heard = listen()
+    const [ada, star, bob] = [await person('Ada M10'), await person('all-star'), await person('Bob M10')]
+    const room = await roomWith('Names M10', ada, star, bob)
+    await bob.send('@all-star lunch?')
+    await arrived(star, room.id, '@all-star lunch?')
+    expect(heard).toEqual(CHIME) // only all-star; nobody else
+    heard.length = 0
+    await bob.send('@all lunch?')
+    await arrived(ada, room.id, '@all lunch?')
+    expect(heard).toEqual([...CHIME, ...CHIME]) // Ada and all-star
+  })
+
+  it('wakes the audio up when somebody acts, and again when a mention arrives, because a browser suspends it until a click', async () => {
+    let resumed = 0
+    const notes: number[] = []
+    class StubbornAudio {
+      state = 'suspended' // and it stays so unless asked each time
+      currentTime = 0
+      destination = {}
+      resume() {
+        resumed++
+        return Promise.resolve()
+      }
+      createOscillator() {
+        return { frequency: { set value(v: number) { notes.push(v) } }, connect: (node: unknown) => node, start() {}, stop() {} }
+      }
+      createGain() {
+        return { gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }
+      }
+    }
+    vi.stubGlobal('AudioContext', StubbornAudio)
+    const [ada, bob] = [await person('Ada M11'), await person('Bob M11')]
+    expect(resumed).toBeGreaterThanOrEqual(1) // signing in is a click
+    const room = await roomWith('Wake M11', ada, bob)
+    const before = resumed
+    await bob.send('@Ada M11 wake up')
+    await arrived(ada, room.id, '@Ada M11 wake up')
+    expect(resumed).toBeGreaterThan(before)
+    expect(notes).toEqual(CHIME)
+  })
+
+  it('still plays the chime when the browser refuses the desktop notification', async () => {
+    const heard = listen()
+    class Refusing {
+      static permission = 'granted'
+      constructor() {
+        throw new TypeError('Illegal constructor')
+      }
+    }
+    vi.stubGlobal('Notification', Refusing)
+    vi.stubGlobal('document', { hidden: true })
+    const [ada, bob] = [await person('Ada M12'), await person('Bob M12')]
+    const room = await roomWith('Refused M12', ada, bob)
+    ada.state.settings.notifications = true
+    await bob.send('@Ada M12 are you there?')
+    await until(() => ada.state.joined[room.id].unread === 1)
+    expect(heard).toEqual(CHIME)
+    expect(ada.state.joined[room.id].mentioned).toBe(true)
   })
 
   it('makes no sound for somebody you muted', async () => {

@@ -149,8 +149,8 @@ Client to server, each with an acknowledgement `{ ok: true, ... }` or `{ error, 
 ## Tests
 
 ```bash
-npm test                        # 297 tests without Redis (52 more are skipped)
-REDIS_URL=redis://localhost:6379 npm test   # 349 tests, with the Redis registry and two real servers
+npm test                        # 309 tests without Redis (52 more are skipped)
+REDIS_URL=redis://localhost:6379 npm test   # 361 tests, with the Redis registry and two real servers
 npm run test:coverage           # with a coverage report (about 84%, 97% on the server)
 npm run build                   # type-checks the code and the tests, then builds
 ```

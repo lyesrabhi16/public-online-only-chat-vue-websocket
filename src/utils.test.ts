@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { EMOJIS as SERVER_EMOJIS } from '../server/rooms.js'
-import { EMOJIS, clock, codeFromHash, colorFor, formatTime, groupCode, inviteLink, mentionCandidates, mentionQuery, mentions, mentionsEveryone, parseWhisper, peopleLabel, splitMentions, typingLabel } from './utils'
+import { EMOJIS, clock, codeFromHash, colorFor, formatTime, groupCode, inviteLink, mentionCandidates, mentionEnd, mentionQuery, mentions, mentionsByName, mentionsEveryone, parseWhisper, peopleLabel, splitMentions, typingLabel } from './utils'
 
 describe('colorFor', () => {
   it('gives the same colour to the same name, whatever the case', () => {
@@ -100,6 +100,51 @@ describe('mentions', () => {
     expect(mentionsEveryone('write to me@all.com')).toBe(false)
     expect(mentions('mail ada@Ada.com', 'Ada')).toBe(false)
     expect(mentionsEveryone('(@all)')).toBe(true) // punctuation around it is fine
+  })
+
+  it('reads a hyphen or a period that goes on into a word as part of that word, but not one that ends a sentence', () => {
+    expect(mentionsEveryone('@all-hands today')).toBe(false)
+    expect(mentionsEveryone('@all.hands')).toBe(false)
+    expect(mentionsEveryone('Hello @all.')).toBe(true)
+    expect(mentionsEveryone('Hello @all, see you')).toBe(true)
+    expect(mentionsEveryone('Hello @all - see you')).toBe(true)
+    expect(mentionsByName('@Bob.Smith hi', 'Bob', ['Bob'])).toBe(false)
+    expect(mentionsByName('Thanks @Bob.', 'Bob', ['Bob'])).toBe(true)
+  })
+
+  it('is read the same way by everybody in the room: a nickname that starts like "all" is that person', () => {
+    const room = ['Ada', 'all-star', 'Bob']
+    expect(mentions('@all-star lunch?', 'Ada', room)).toBe(false)
+    expect(mentions('@all-star lunch?', 'all-star', room)).toBe(true)
+    expect(mentionsEveryone('@all-star lunch?', room)).toBe(false)
+    expect(mentions('@all lunch?', 'Ada', room)).toBe(true)
+    expect(mentions('@all lunch?', 'all-star', room)).toBe(true)
+  })
+
+  it('never takes "all" for a nickname: it is the word for everybody (a user of an older server could still have it)', () => {
+    expect(splitMentions('@all', ['all'])).toEqual([{ text: '@all', all: true }])
+    expect(mentionsByName('@all', 'all', ['all'])).toBe(false)
+    expect(mentionCandidates('', ['all', 'Ada'])).toEqual(['all', 'Ada']) // listed once
+  })
+
+  it('only counts your name in a whisper, never "@all": mentionsByName leaves it out', () => {
+    expect(mentionsByName('@all psst', 'Ada', ['Ada'])).toBe(false)
+    expect(mentionsByName('@Ada psst', 'Ada', ['Ada'])).toBe(true)
+  })
+})
+
+describe('where a mention ends', () => {
+  const room = ['Ada', 'Ada Lovelace', 'Bob']
+
+  it('is the end of the name when the caret is inside one, so that a suggestion replaces all of it', () => {
+    expect(mentionEnd('ask @Ada Lovelace about it', 4, 7, room)).toBe(17)
+    expect(mentionEnd('ask @all today', 4, 6, room)).toBe(8)
+  })
+
+  it('is the caret when what follows is not a name that was typed', () => {
+    expect(mentionEnd('hi @bo', 3, 6, room)).toBe(6)
+    expect(mentionEnd('hi @Adam', 3, 6, ['Ada'])).toBe(6) // "Adam" is another word, not "Ada" with a tail
+    expect(mentionEnd('hi @', 3, 4, room)).toBe(4)
   })
 })
 
