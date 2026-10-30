@@ -12,8 +12,8 @@ More: [recording a voice message](docs/screenshots/recording.png) · [unread cou
 
 ## What you can do
 
-- **Rooms and codes**: create a room and you are inside, running it, with its **code** (eight letters and digits such as `K7M2 QXAB`). Anybody who has the code can come in; nobody else can. Rooms cannot be browsed or listed. Somebody who comes in is let into the encrypted group by a member who is there, so a room nobody answers in cannot be entered (the newcomer is told after 20 seconds).
-- **Invite**: an **invite link** (`/#/join/K7M2QXAB`, the code is after the `#`, which browsers never send to a server) and a **QR code** to scan with a phone, with the share sheet where the browser has one. The code is taken out of the address bar as soon as the page has read it.
+- **Rooms and codes**: create a room and you are inside, running it, with its **code** (ten letters and digits such as `K7M2Q XAB9T`). Anybody who has the code can come in; nobody else can. Rooms cannot be browsed or listed. Somebody who comes in is let into the encrypted group by a member who is there, so a room nobody answers in cannot be entered (the newcomer is told after 20 seconds).
+- **Invite**: an **invite link** (`/#/join/K7M2QXAB9T`, the code is after the `#`, which browsers never send to a server) and a **QR code** to scan with a phone, with the share sheet where the browser has one. The code is taken out of the address bar as soon as the page has read it.
 - **Messages**: text, **photos** (shrunk to 900 px in the browser), **voice messages** (up to 30 seconds, recorded with a **live scrolling waveform**, shown as loudness bars that fill while they play), **replies** (the quoted message is shown), **edit** and **delete** (your own), **reactions** (👍 ❤️ 😂 😮 😢 🎉), **@mentions** (highlighted, yours in a stronger colour) and **whispers** to one person (`/w Nickname message`).
 - **Keeping up**: an unread counter per room (with a mark when somebody mentioned you), the count in the browser tab title, an optional beep and optional desktop notifications (which never contain what was said), "typing…", who is in the room, "joined / left" notices.
 - **Running a room**: the person who runs it can **lock** it (nobody new comes in, but people who were in can come back after a connection blip), **remove** somebody (who cannot come back with the code), or make a **new code** (the old one stops finding the room; the members learn the new one through the encrypted group). If the owner leaves, the person who has been there longest takes over. Anybody can **mute** somebody: their messages disappear from your screen only.
@@ -43,7 +43,7 @@ Every message, edit and photo: MLS application message, readable by the members 
 **What this does and does not protect against.**
 
 - **Protected**: somebody who reads the network traffic, the server's memory or logs, or what travels through Redis sees handles, sizes and timing, never a code, a key or a word. The server's operator cannot read messages and cannot get into a room by itself.
-- **Not protected, and the big one**: a code has **8 characters, 40 bits**. Whoever has a room's handle (the server's operator, anybody with access to its memory or Redis) can **try every code offline**, each try costing one Argon2id run. That is about 10¹² runs; at a rough 0.15 s of one CPU core each and a few cents per core-hour, it comes to **a few million dollars** to find the code of *every* room at once (one pass tests all handles, and the salt is the same for everybody, so the work is reusable). That is expensive, not impossible, and a longer code would be the real fix (10 characters make it a thousand times dearer). With the code, an attacker can join the group as a member and read **from then on** (not the past); the page shows the server's list of people, so a dishonest server could hide them from it. A 6-character code would have cost about two thousand dollars.
+- **Not protected, and the big one**: a code has **10 characters, 50 bits**. Whoever has a room's handle (the server's operator, anybody with access to its memory or Redis) can **try every code offline**, each try costing one Argon2id run. That is about 10¹⁵ runs; at a rough 0.15 s of one CPU core each and a few cents per core-hour, it comes to **about two billion dollars** to find the code of *every* room at once (one pass tests all handles, and the salt is the same for everybody, so the work is reusable). That is far out of reach for most attackers, but it is a price, not a proof, and it only holds while hardware stays this expensive: a code is a password, and a longer one is the real fix. With the code, an attacker can join the group as a member and read **from then on** (not the past); the page shows the server's list of people, so a dishonest server could hide them from it. For comparison, an 8-character code would cost a few million dollars and a 6-character one about two thousand.
 - **Whispers** are routed only to the person they are for, but their key is derivable by every member of the group (it protects them from the server, not from the other members), and a whisper made just as the group changes may arrive unreadable.
 - **Members are not authenticated beyond the code.** The server tells each page who is who; the library does not say which member encrypted a message, so a dishonest server could relabel who said what, and a member who knows the code is as good as any other.
 - **Metadata is visible to the server**: who is in which room, nicknames, room names, when and how much people write, who is typing, and reactions (the emoji and which message).
@@ -112,7 +112,7 @@ Everything the client sends is untrusted, so the server checks it (see `server/r
 
 | | |
 | --- | --- |
-| room code | 8 characters from 32 (no `0/O` or `1/I`): 40 bits, chosen at random by the page. The server never sees it, only its **handle** (64 hex digits), which must be unique among open rooms |
+| room code | 10 characters from 32 (no `0/O` or `1/I`): 50 bits, chosen at random by the page. The server never sees it, only its **handle** (64 hex digits), which must be unique among open rooms |
 | wrong handles | 10 per address every 5 minutes (joining, creating and changing the code all count), then even the right one is refused until the window passes. The limit is shared by all servers; behind a proxy set `TRUST_PROXY=1` so that each visitor has their own. It stops outsiders from guessing; it does nothing against the server itself (see above) |
 | nickname | 2 to 20 letters, digits, spaces, `.`, `_`, `-`; unique among people online (across servers) |
 | room name | 2 to 30 characters; two rooms can share a name, their handles tell them apart; at most 200 rooms |
@@ -149,8 +149,8 @@ Client to server, each with an acknowledgement `{ ok: true, ... }` or `{ error, 
 ## Tests
 
 ```bash
-npm test                        # 267 tests without Redis (51 more are skipped)
-REDIS_URL=redis://localhost:6379 npm test   # 318 tests, with the Redis registry and two real servers
+npm test                        # 268 tests without Redis (51 more are skipped)
+REDIS_URL=redis://localhost:6379 npm test   # 319 tests, with the Redis registry and two real servers
 npm run test:coverage           # with a coverage report (about 84%, 97% on the server)
 npm run build                   # type-checks the code and the tests, then builds
 ```

@@ -5,10 +5,10 @@ import { CODE_ALPHABET, CODE_LENGTH, COST, aesKey, canonicalCode, decrypt, deriv
 const cheap = { t: 1, m: 8 }
 
 describe('codes', () => {
-  it('have 8 characters and none that is easy to mix up', () => {
-    expect(CODE_LENGTH).toBe(8)
+  it('have 10 characters and none that is easy to mix up', () => {
+    expect(CODE_LENGTH).toBe(10)
     for (const confusing of '0O1I') expect(CODE_ALPHABET).not.toContain(confusing)
-    for (let i = 0; i < 200; i++) expect(generateCode()).toMatch(/^[A-HJ-NP-Z2-9]{8}$/)
+    for (let i = 0; i < 200; i++) expect(generateCode()).toMatch(/^[A-HJ-NP-Z2-9]{10}$/)
   })
 
   it('are random, and every character of the alphabet comes up', () => {
@@ -18,35 +18,35 @@ describe('codes', () => {
   })
 
   it('are read in any case, with or without separators', () => {
-    expect(canonicalCode('k7m2-qxab')).toBe('K7M2QXAB')
-    expect(canonicalCode('  K7M2 QXAB ')).toBe('K7M2QXAB')
-    expect(canonicalCode('k7m2_qxab')).toBe('K7M2QXAB')
+    expect(canonicalCode('k7m2q-xab9t')).toBe('K7M2QXAB9T')
+    expect(canonicalCode('  K7M2Q XAB9T ')).toBe('K7M2QXAB9T')
+    expect(canonicalCode('k7m2q_xab9t')).toBe('K7M2QXAB9T')
   })
 
-  it.each([[''], ['K7M2QXA'], ['K7M2QXABC'], ['K7M2QX0B'], ['K7M2QXIB'], ['K7M2QX!B'], ['K7M2QX B!']])('%j is not a code', (code) => {
+  it.each([[''], ['K7M2QXAB9'], ['K7M2QXAB9TC'], ['K7M2QXAB90'], ['K7M2QXAB9I'], ['K7M2QXAB9!'], ['K7M2QXAB9T 9!'], ['K7M2QXA']])('%j is not a code', (code) => {
     expect(isCode(code)).toBe(false)
   })
 
   it('are recognised however they are typed', () => {
-    expect(isCode('k7m2-qxab')).toBe(true)
-    expect(isCode(' K7M2 QXAB ')).toBe(true)
+    expect(isCode('k7m2q-xab9t')).toBe(true)
+    expect(isCode(' K7M2Q XAB9T ')).toBe(true)
   })
 
   it('are made with a random source that can be replaced, and a byte maps evenly onto 32 characters', () => {
-    expect(generateCode((n) => new Uint8Array(n))).toBe('AAAAAAAA')
-    expect(generateCode((n) => new Uint8Array(n).fill(255))).toBe('99999999')
-    expect(generateCode((n) => new Uint8Array(n).fill(32))).toBe('AAAAAAAA') // 32 wraps round to the first character
+    expect(generateCode((n) => new Uint8Array(n))).toBe('AAAAAAAAAA')
+    expect(generateCode((n) => new Uint8Array(n).fill(255))).toBe('9999999999')
+    expect(generateCode((n) => new Uint8Array(n).fill(32))).toBe('AAAAAAAAAA') // 32 wraps round to the first character
   })
 })
 
 describe('what is made of a code', () => {
   it('is the same on every page, however the code was typed', async () => {
-    const [one, two] = await Promise.all([deriveSecrets('K7M2QXAB', cheap), deriveSecrets(' k7m2-qxab ', cheap)])
+    const [one, two] = await Promise.all([deriveSecrets('K7M2QXAB9T', cheap), deriveSecrets(' k7m2q-xab9t ', cheap)])
     expect(two).toEqual(one)
   })
 
   it('is a handle of 64 hex digits and two keys of 32 bytes, all different', async () => {
-    const secrets = await deriveSecrets('K7M2QXAB', cheap)
+    const secrets = await deriveSecrets('K7M2QXAB9T', cheap)
     expect(secrets.handle).toMatch(/^[0-9a-f]{64}$/)
     expect(secrets.psk).toHaveLength(32)
     expect(secrets.admissionKey).toHaveLength(32)
@@ -55,9 +55,9 @@ describe('what is made of a code', () => {
   })
 
   it('differs for every code, and for every cost (so a page with another cost finds no room)', async () => {
-    const a = await deriveSecrets('K7M2QXAB', cheap)
-    const b = await deriveSecrets('K7M2QXAC', cheap)
-    const c = await deriveSecrets('K7M2QXAB', { t: 2, m: 8 })
+    const a = await deriveSecrets('K7M2QXAB9T', cheap)
+    const b = await deriveSecrets('K7M2QXAB9U', cheap)
+    const c = await deriveSecrets('K7M2QXAB9T', { t: 2, m: 8 })
     expect(new Set([a.handle, b.handle, c.handle]).size).toBe(3)
   })
 

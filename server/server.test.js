@@ -82,7 +82,7 @@ describe("rooms and codes", () => {
     const seen = record(bob, "rooms");
     const room = await roomWith("Secret", ada);
     expect((await ask(bob, "room:join", { room: room.id })).code).toBe("code_invalid");
-    expect((await ask(bob, "room:join", { handle: "K7M2QXAB" })).code).toBe("code_invalid"); // a code, not its handle
+    expect((await ask(bob, "room:join", { handle: "K7M2QXAB9T" })).code).toBe("code_invalid"); // a code, not its handle
     expect((await ask(bob, "room:join", { handle: fresh() })).code).toBe("code_unknown");
     const joined = await ask(bob, "room:join", { handle: room.handle });
     expect(joined.members.map((m) => m.nickname)).toEqual(["Ada R2", "Bob R2"]);

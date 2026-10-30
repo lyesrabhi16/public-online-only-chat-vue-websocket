@@ -1,13 +1,13 @@
 // What a room code is for, and how it is kept away from the server.
 //
-// The code is 8 characters out of 32 (40 bits). It is typed or scanned by the people who should get in, and it never leaves their
+// The code is 10 characters out of 32 (50 bits). It is typed or scanned by the people who should get in, and it never leaves their
 // browsers. Each browser turns it, with a slow memory-hard hash (Argon2id, about a second), into three separate secrets:
 //   - the handle: all the server ever learns, and what it finds the room by;
 //   - the PSK: a pre-shared key that goes into the group encryption (see mls.ts) every time somebody is let in, so that only people
 //     who know the code can join the group;
 //   - the admission key: with it a newcomer proves they know the code when they ask to be let in.
 //
-// An honest limit: 40 bits is still a password. Whoever has a handle can try every code offline (about 10^12), and every try costs
+// An honest limit: 50 bits is still a password. Whoever has a handle can try every code offline (about 10^15), and every try costs
 // one Argon2 run. That is a lot of money for one room and no real obstacle for somebody who is willing to spend it, and the same
 // work tests every room at once. A longer code is the only real fix. See the README, "What this does and does not protect against".
 
@@ -19,11 +19,11 @@ import { bytesToHex } from '@noble/hashes/utils.js'
 
 /** 32 characters, without 0/O and 1/I, which are easy to mix up. */
 export const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
-export const CODE_LENGTH = 8
+export const CODE_LENGTH = 10
 
 const utf8 = (text: string) => new TextEncoder().encode(text)
 
-/** The code as it was typed ("k7m2-qxab", " K7M2 QXAB ") and as it counts ("K7M2QXAB"): all the browsers must derive from the same text. */
+/** The code as it was typed ("k7m2q-xab9t", " K7M2Q XAB9T ") and as it counts ("K7M2QXAB9T"): all the browsers must derive from the same text. */
 export function canonicalCode(code: string): string {
   return code.replace(/[\s_-]+/g, '').toUpperCase()
 }

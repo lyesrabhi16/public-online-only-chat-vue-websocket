@@ -55,7 +55,7 @@ describe("handles", () => {
     expect(isHandle("0123456789abcdef".repeat(4))).toBe(true);
   });
 
-  it.each([[""], ["a".repeat(63)], ["a".repeat(65)], ["A".repeat(64)], ["g".repeat(64)], ["K7M2QXAB"], [123], [null], [{ a: 1 }]])("%j is not a handle", (raw) => {
+  it.each([[""], ["a".repeat(63)], ["a".repeat(65)], ["A".repeat(64)], ["g".repeat(64)], ["K7M2QXAB9T"], [123], [null], [{ a: 1 }]])("%j is not a handle", (raw) => {
     expect(isHandle(raw)).toBe(false);
   });
 });

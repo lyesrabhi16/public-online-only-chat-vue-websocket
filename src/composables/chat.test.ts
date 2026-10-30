@@ -120,7 +120,7 @@ describe('getting in', () => {
   })
 
   it('shows the refusal when the invite link has a wrong code', async () => {
-    const bob = await person('Bob S2b', 'ZZZZZZZZ')
+    const bob = await person('Bob S2b', 'ZZZZZZZZZZ')
     expect(bob.state.error).toMatch(/No room has this code/)
     expect(bob.state.joined).toEqual({})
   })
@@ -130,11 +130,11 @@ describe('rooms', () => {
   it('creates a room that you run, with a code, and lets people in with it only', async () => {
     const [ada, bob] = [await person('Ada S3'), await person('Bob S3')]
     const room = await roomWith('Private S3', ada)
-    expect(room.code).toMatch(/^[A-HJ-NP-Z2-9]{8}$/)
+    expect(room.code).toMatch(/^[A-HJ-NP-Z2-9]{10}$/)
     expect(room.ownerId).toBe(ada.state.me!.id)
-    expect(await bob.join('ZZZZZZZZ')).toMatch(/No room/)
+    expect(await bob.join('ZZZZZZZZZZ')).toMatch(/No room/)
     expect(await bob.join('nope')).toMatch(/not a room code/)
-    expect(await bob.join(room.code.slice(0, 7))).toMatch(/not a room code/)
+    expect(await bob.join(room.code.slice(0, 9))).toMatch(/not a room code/)
     expect(await bob.join(`${room.code.slice(0, 4)}-${room.code.slice(4)}`.toLowerCase())).toBe('')
     await until(() => ada.state.joined[room.id].members.length === 2)
     expect(ada.state.joined[room.id].room.members).toBe(2)
@@ -387,7 +387,7 @@ describe('running a room', () => {
     const before = bob.state.joined[room.id].code
     // Ada is the owner: a member who is not cannot make the others change the code, even with a well-formed message
     const mallory = await insider(room.code, 'Mallory S20b')
-    await ask(mallory.socket, 'message', { room: mallory.roomId, body: await mallory.group.seal(new TextEncoder().encode(JSON.stringify({ k: 'code', code: 'ZZZZZZZZ' }))) })
+    await ask(mallory.socket, 'message', { room: mallory.roomId, body: await mallory.group.seal(new TextEncoder().encode(JSON.stringify({ k: 'code', code: 'ZZZZZZZZZZ' }))) })
     await sleep(500)
     expect(bob.state.joined[room.id].code).toBe(before)
     expect(ada.state.joined[room.id].code).toBe(before)
@@ -451,7 +451,7 @@ describe('the group encryption', () => {
     const candidate = await newCandidate({ id: spy.socket.id!, nickname: 'Mallory G3' })
     const welcomes: unknown[] = []
     spy.socket.on('mls:welcome', (w) => welcomes.push(w))
-    const wrong = await deriveSecrets('ZZZZZZZZ', cheap)
+    const wrong = await deriveSecrets('ZZZZZZZZZZ', cheap)
     await ask(spy.socket, 'mls:request', { room: spy.roomId, keyPackage: toBase64(candidate.encoded), proof: prove(wrong.admissionKey, candidate.encoded) })
     await ask(spy.socket, 'mls:request', { room: spy.roomId, keyPackage: toBase64(candidate.encoded), proof: toBase64(new Uint8Array(32)) })
     // and a proof that is good, but for another key package, cannot be moved onto this one
@@ -544,12 +544,12 @@ describe('the group encryption', () => {
     raw.push(ghost)
     await new Promise<void>((r) => ghost.on('connect', () => r()))
     await ask(ghost, 'hello', { nickname: 'Ghost G9' })
-    const secrets: Secrets = await deriveSecrets('K7M2QXAB', cheap)
+    const secrets: Secrets = await deriveSecrets('K7M2QXAB9T', cheap)
     const made = await ask<{ room: { id: string } }>(ghost, 'room:create', { name: 'Away G9', handle: secrets.handle })
     const bob = createChat(url, connect, null, { cost: cheap, admissionMs: 600, requestEveryMs: 200 })
     chats.push(bob)
     expect(await bob.login('Bob G9')).toBe('')
-    expect(await bob.join('K7M2QXAB')).toMatch(/Nobody in the room let you in/)
+    expect(await bob.join('K7M2QXAB9T')).toMatch(/Nobody in the room let you in/)
     expect(bob.state.joined).toEqual({})
     await until(() => (server.registry as unknown as { rooms: Map<string, { members: Set<string> }> }).rooms.get(made.room.id)!.members.size === 1)
   })
@@ -589,7 +589,7 @@ describe('a description of the room that arrives late', () => {
     }
     const chat = createChat('http://nowhere', (() => socket) as never, null, { cost: cheap })
     expect(await chat.login('Me')).toBe('')
-    expect(await chat.join('K7M2QXAB')).toBe('')
+    expect(await chat.join('K7M2QXAB9T')).toBe('')
     return { chat, socket }
   }
 

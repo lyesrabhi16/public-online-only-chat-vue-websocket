@@ -816,7 +816,7 @@ let shared: Chat | null = null
 
 /**
  * The one chat of the page. `VITE_SOCKET_URL` points at the server; in production the server also serves the page, so the address is simply this site.
- * An invite link (https://site/#/join/K7M2QX) carries a code; it is read once and removed from the address bar.
+ * An invite link (https://site/#/join/K7M2QXAB9T) carries a code; it is read once and removed from the address bar.
  */
 export function useChat(inviteCode: string | null = null): Chat {
   if (!shared) {

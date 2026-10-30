@@ -23,7 +23,7 @@ const msg = (over: Partial<Msg> = {}): Msg => ({
 
 const joined = (over: Partial<JoinedRoom> = {}): JoinedRoom => ({
   room: { id: 'r1', name: 'Study group', members: 3, locked: false, ownerId: 'me', rev: 1 },
-  code: 'K7M2QXAB',
+  code: 'K7M2QXAB9T',
   lines: [
     { kind: 'event', id: 'e1', at: '2026-01-01T10:00:00.000Z', key: 'event.youJoined', params: {} },
     { kind: 'message', msg: msg() },
@@ -47,7 +47,7 @@ describe('ChatPanel', () => {
   it('shows the room, its code, the head count, notices and messages', () => {
     const wrapper = make()
     expect(wrapper.find('h2').text()).toBe('Study group')
-    expect(wrapper.find('.code-chip').text()).toContain('K7M2 QXAB')
+    expect(wrapper.find('.code-chip').text()).toContain('K7M2Q XAB9T')
     expect(wrapper.text()).toContain('3 people here')
     expect(wrapper.find('.event').text()).toContain('You joined')
     expect(wrapper.findAll('.message')).toHaveLength(2)
