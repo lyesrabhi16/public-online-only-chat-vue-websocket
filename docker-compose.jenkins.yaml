@@ -1,0 +1,46 @@
+# A local Jenkins to play with CI/CD (not needed to run the chat).
+#   docker compose -f docker-compose.jenkins.yaml up --build     then open http://localhost:8080
+# Jenkins builds Docker images through the "docker" service (Docker-in-Docker), as in the official Jenkins documentation.
+services:
+  docker:
+    image: docker:dind
+    container_name: jenkins-docker
+    privileged: true # Docker-in-Docker needs it
+    environment:
+      DOCKER_TLS_CERTDIR: /certs
+    volumes:
+      - jenkins-docker-certs:/certs/client
+      - jenkins_home:/var/jenkins_home
+    networks:
+      jenkins:
+        aliases:
+          - docker
+    restart: always
+
+  jenkins:
+    build:
+      context: .
+      dockerfile: jenkins.Dockerfile
+    container_name: jenkins
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - jenkins-docker-certs:/certs/client:ro
+    networks:
+      - jenkins
+    environment:
+      DOCKER_HOST: tcp://docker:2376
+      DOCKER_CERT_PATH: /certs/client
+      DOCKER_TLS_VERIFY: "1"
+    depends_on:
+      - docker
+    restart: always
+
+networks:
+  jenkins:
+
+volumes:
+  jenkins_home:
+  jenkins-docker-certs:

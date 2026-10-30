@@ -1,42 +1,85 @@
-name: CI Pipline
+name: CI
 
-on: push
+on:
+  push:
+  pull_request:
 
 jobs:
-  build:
-    name: Building App
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-
-      - name: install dependecies
-        run: npm install
-
-      - name: Build
-        run: npm run build
-
   test:
+    name: Build and test
     runs-on: ubuntu-latest
-    name: testing App
-    needs: build
+    # a Redis for the tests of the cluster (without it they are skipped)
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      REDIS_URL: redis://localhost:6379
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-
-      - name: install dependecies
-        run: npm install
-
-      - name: Run tests
-        run: npm run test -- --coverage
-
-      - name: Upload results to Codecov
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Type-check and build
+        run: npm run build
+      - name: Tests with coverage
+        run: npm run test:coverage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+      # optional: only when the CODECOV_TOKEN secret exists
+      - name: Upload the coverage to Codecov
+        if: env.CODECOV_TOKEN != ''
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t public-chat .
+      - name: The container starts and answers its health check
+        run: |
+          docker run -d --name chat -p 3000:3000 public-chat
+          for _ in $(seq 1 30); do
+            curl -fs http://localhost:3000/health && exit 0
+            sleep 1
+          done
+          docker logs chat
+          exit 1
+
+  scale:
+    name: Two servers behind a load balancer
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Start Redis, two chat servers and nginx
+        run: |
+          docker compose -f docker-compose.scale.yaml up -d --build
+          for _ in $(seq 1 60); do
+            curl -fs http://localhost:8080/health && exit 0
+            sleep 1
+          done
+          docker compose -f docker-compose.scale.yaml logs
+          exit 1
+      - name: People on different servers find each other
+        run: npm run scale-check
+      - name: Logs
+        if: failure()
+        run: docker compose -f docker-compose.scale.yaml logs

@@ -1,26 +1,40 @@
 {
-  "name": "websockets",
+  "name": "public-online-only-chat",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "Live-only public chat rooms: Vue 3 + Socket.IO. Nothing said is ever stored.",
   "type": "module",
   "scripts": {
     "dev-server": "nodemon server.js",
     "dev": "vite",
     "build": "vue-tsc -b && vite build",
     "preview": "vite preview",
-    "test": "jest --passWithNoTests"
+    "start": "node server.js",
+    "scale-check": "node scripts/scale-check.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@noble/hashes": "^2.4.0",
+    "@socket.io/redis-adapter": "^8.3.0",
+    "ioredis": "^6.0.0",
+    "qrcode": "^1.5.4",
     "socket.io": "^4.8.0",
     "socket.io-client": "^4.8.0",
-    "vue": "^3.5.10"
+    "ts-mls": "^1.6.4",
+    "vue": "^3.5.44"
   },
   "devDependencies": {
-    "@vitejs/plugin-vue": "^5.1.4",
-    "jest": "^29.7.0",
+    "@types/qrcode": "^1.5.6",
+    "@vitejs/plugin-vue": "^6.0.0",
+    "@vitest/coverage-v8": "^5.0.5",
+    "@vue/test-utils": "^2.4.6",
+    "jsdom": "^25.0.1",
     "nodemon": "^3.1.7",
     "typescript": "^5.5.3",
-    "vite": "^5.4.8",
+    "vite": "^7.0.0",
+    "vitest": "^5.0.5",
     "vue-tsc": "^2.1.6"
   }
 }

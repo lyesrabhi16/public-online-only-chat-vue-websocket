@@ -1,0 +1,14 @@
+{
+  "name": "Chat rooms with a code",
+  "short_name": "Chat rooms",
+  "description": "Live-only chat rooms: you need the code to join, nothing is ever stored.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f4f5fb",
+  "theme_color": "#4f46e5",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
