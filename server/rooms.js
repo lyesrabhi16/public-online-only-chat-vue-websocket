@@ -1,7 +1,8 @@
 // The rules of the chat, with no Socket.IO in sight so they can be tested on their own:
 // who is online, which rooms exist, who is in them, who runs them, and what is allowed.
-// A room can only be entered with its code, and nothing here (or anywhere on the server) stores a message:
-// the chat is live only. Every refusal comes with a stable `code` so that the page can show it in its own language.
+// A room can only be entered with its code, but the server never sees the code: the page turns it into a "handle" (a hash
+// that is expensive to compute, see src/crypto.ts) and the server only knows that. Nothing here (or anywhere on the server)
+// stores a message: the chat is live only. Every refusal comes with a stable `code` so that the page can show it in its own language.
 import crypto from "node:crypto";
 
 export const LIMITS = {
@@ -18,16 +19,13 @@ export const LIMITS = {
   windowMs: 5000, // ... per this many milliseconds, per connection
   mediaBurst: 3, // photos and voice messages ...
   mediaWindowMs: 10_000, // ... per this many milliseconds, per connection
+  mlsMax: 200_000, // a message of the group encryption (a key package, a commit, a welcome with the whole member tree), as text
   wrongCodes: 10, // wrong codes allowed ...
   wrongCodesWindowMs: 5 * 60 * 1000, // ... per this many milliseconds, per address
 };
 
 /** The reactions that exist. */
 export const EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🎉"];
-
-// Six characters out of 32 (no 0/O or 1/I, which are easy to mix up): about a billion codes.
-export const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-export const CODE_LENGTH = 6;
 
 const NICKNAME = /^[\p{L}\p{N}][\p{L}\p{N} ._-]*$/u;
 const CONTROL = /[\u0000-\u001f\u007f]/;
@@ -41,7 +39,7 @@ export const SENTENCES = {
   too_many_rooms: () => "There are too many rooms right now. Try again later.",
   rooms_per_user: (p) => `You can be in ${p.max} rooms at a time.`,
   code_unavailable: () => "Could not make a code. Try again.",
-  code_invalid: () => "That is not a room code. A code has 6 letters and digits.",
+  code_invalid: () => "That is not a room code. A code has 8 letters and digits.",
   code_unknown: () => "No room has this code. A room closes when everyone has left it.",
   banned: () => "You were removed from this room.",
   locked: () => "This room is locked: nobody new can come in.",
@@ -50,6 +48,8 @@ export const SENTENCES = {
   not_owner: () => "Only the person who runs the room can do this.",
   cannot_kick_self: () => "You cannot remove yourself: leave the room instead.",
   unknown_target: () => "This person is not in the room.",
+  bad_mls: () => "That message of the encryption is not valid.",
+  stale_epoch: () => "The room's encryption moved on. Try again.",
 };
 
 /** A refusal: a sentence for people, a stable code for programs, and the numbers or names the sentence mentions. */
@@ -77,8 +77,8 @@ export function cleanRoomName(raw) {
 }
 
 /**
- * What a message carries is encrypted by the page with a key the server never sees (see src/crypto.ts), so the server
- * does not need to read it, only measure it (it does receive the room code, so this is not protection against the server itself). Short bodies are text and long ones are photos or voice messages; each kind has its own size limit and rate limit.
+ * What a message carries is encrypted by the pages (MLS, see src/mls.ts) for the members of the room, so the server cannot read it
+ * and only measures it. Short bodies are text and long ones are photos or voice messages; each kind has its own size limit and rate limit.
  */
 export function classifyBody(raw, { textOnly = false } = {}) {
   if (typeof raw !== "string" || raw.length === 0) return refusal("body_required", "A message cannot be empty.");
@@ -89,19 +89,11 @@ export function classifyBody(raw, { textOnly = false } = {}) {
 
 export const isMessageId = (raw) => typeof raw === "string" && UUID.test(raw);
 
-/** What somebody typed ("k7m-2qx", " K7M2QX ") as a code, or null when it cannot be one. */
-export function normalizeCode(raw) {
-  if (typeof raw !== "string") return null;
-  const value = raw.replace(/[\s_-]+/g, "").toUpperCase();
-  return value.length === CODE_LENGTH && [...value].every((c) => CODE_ALPHABET.includes(c)) ? value : null;
-}
+/** The handle of a room: 32 bytes as 64 lowercase hex digits. What it was made from (the code) never reaches the server. */
+export const isHandle = (raw) => typeof raw === "string" && /^[0-9a-f]{64}$/.test(raw);
 
-/** A random code. `pick` (a function from n to a number below n) can be replaced in tests. */
-export function generateCode(pick = (n) => crypto.randomInt(n)) {
-  let code = "";
-  for (let i = 0; i < CODE_LENGTH; i++) code += CODE_ALPHABET[pick(CODE_ALPHABET.length)];
-  return code;
-}
+/** A message of the group encryption, as base64 text of a sensible size. */
+export const isMlsText = (raw) => typeof raw === "string" && raw.length > 0 && raw.length <= LIMITS.mlsMax && /^[A-Za-z0-9+/]+=*$/.test(raw);
 
 /** At most `burst` events every `windowMs`; `now` can be replaced in tests. */
 export class RateLimiter {
@@ -157,11 +149,10 @@ export class FailureLimiter {
  * that several servers can share the chat. Every method may be awaited.
  */
 export class Registry {
-  constructor(generate = generateCode) {
-    this.generate = generate;
+  constructor() {
     this.users = new Map(); // connection id -> { id, nickname, rooms: Set<room id> }
-    this.rooms = new Map(); // room id -> { id, name, code, members: Set<connection id>, ownerId, locked, known: Set<lowercase nickname>, banned: Set<lowercase nickname> }
-    this.byCode = new Map(); // code -> room id
+    this.rooms = new Map(); // room id -> { id, name, handle, epoch, members: Set<connection id>, ownerId, locked, known: Set<lowercase nickname>, banned: Set<lowercase nickname> }
+    this.byHandle = new Map(); // handle -> room id
   }
 
   // ---- people
@@ -195,7 +186,7 @@ export class Registry {
   // ---- rooms
   summary(room) {
     // `rev` goes up with every change of the room: whoever receives two descriptions of it keeps the one with the higher number
-    return { id: room.id, name: room.name, code: room.code, members: room.members.size, locked: room.locked, ownerId: room.ownerId, rev: room.rev };
+    return { id: room.id, name: room.name, members: room.members.size, locked: room.locked, ownerId: room.ownerId, rev: room.rev };
   }
 
   /** One room as it is now, or null when it is gone. */
@@ -235,23 +226,25 @@ export class Registry {
     return null;
   }
 
-  /** Creates a room and puts its creator in it, as its owner (a room nobody is in does not exist). Several rooms may share a name: the code tells them apart. */
-  createRoom(connectionId, rawName) {
+  /**
+   * Creates a room and puts its creator in it, as its owner (a room nobody is in does not exist). Several rooms may share a name: the code tells them apart.
+   * The creator's page chose the code and sends only its handle. A handle that is taken means a code that is taken; it is counted as a wrong code,
+   * because trying handles here would otherwise be a way to find out which rooms exist.
+   */
+  createRoom(connectionId, rawName, rawHandle) {
     const user = this.users.get(connectionId);
     if (!user) return refusal("nickname_required", "Choose a nickname first.");
     const { value, error, code: errorCode, params } = cleanRoomName(rawName);
     if (error) return { error, code: errorCode, params };
+    if (!isHandle(rawHandle)) return refusal("code_invalid");
     if (this.rooms.size >= LIMITS.rooms) return refusal("too_many_rooms", "There are too many rooms right now. Try again later.");
     if (user.rooms.size >= LIMITS.roomsPerUser) return refusal("rooms_per_user", `You can be in ${LIMITS.roomsPerUser} rooms at a time.`, { max: LIMITS.roomsPerUser });
-    let code = this.generate();
-    for (let attempt = 0; this.byCode.has(code); attempt++) {
-      if (attempt > 50) return refusal("code_unavailable", "Could not make a code. Try again.");
-      code = this.generate();
-    }
+    if (this.byHandle.has(rawHandle)) return { ...refusal("code_unavailable", "Could not make a code. Try again."), wrongCode: true };
     const room = {
       id: crypto.randomBytes(6).toString("hex"),
       name: value,
-      code,
+      handle: rawHandle,
+      epoch: 0, // of the group encryption: the creator starts the group
       members: new Set([connectionId]),
       ownerId: connectionId,
       locked: false,
@@ -260,31 +253,47 @@ export class Registry {
       banned: new Set(),
     };
     this.rooms.set(room.id, room);
-    this.byCode.set(code, room.id);
+    this.byHandle.set(room.handle, room.id);
     user.rooms.add(room.id);
     return { room: this.summary(room) };
   }
 
-  /** Gets a person into the room that has this code. `wrongCode` tells the server to count the failure. */
-  joinWithCode(connectionId, rawCode) {
+  /**
+   * Gets a person into the room that has this handle. `wrongCode` tells the server to count the failure.
+   * `first` is true for a room that nobody was in (its people were all disconnected): the group encryption starts again, and this person starts it.
+   */
+  joinWithHandle(connectionId, rawHandle) {
     const user = this.users.get(connectionId);
     if (!user) return refusal("nickname_required", "Choose a nickname first.");
-    const code = normalizeCode(rawCode);
-    if (!code) return { ...refusal("code_invalid", "That is not a room code. A code has 6 letters and digits."), wrongCode: true };
-    const room = this.rooms.get(this.byCode.get(code));
+    if (!isHandle(rawHandle)) return { ...refusal("code_invalid"), wrongCode: true };
+    const room = this.rooms.get(this.byHandle.get(rawHandle));
     if (!room) return { ...refusal("code_unknown", "No room has this code. A room closes when everyone has left it."), wrongCode: true };
-    if (room.members.has(connectionId)) return { room: this.summary(room), already: true };
+    if (room.members.has(connectionId)) return { room: this.summary(room), already: true, first: false };
     const nick = user.nickname.toLowerCase();
     if (room.banned.has(nick)) return refusal("banned", "You were removed from this room.");
     if (room.locked && !room.known.has(nick)) return refusal("locked", "This room is locked: nobody new can come in.");
     if (room.members.size >= LIMITS.membersPerRoom) return refusal("room_full", "This room is full.");
     if (user.rooms.size >= LIMITS.roomsPerUser) return refusal("rooms_per_user", `You can be in ${LIMITS.roomsPerUser} rooms at a time.`, { max: LIMITS.roomsPerUser });
+    const first = room.members.size === 0;
+    if (first) room.epoch = 0;
     room.members.add(connectionId);
     room.known.add(nick);
     if (!room.ownerId || !this.users.has(room.ownerId)) room.ownerId = connectionId; // an empty room the owner left: whoever comes back runs it
     user.rooms.add(room.id);
     room.rev++;
-    return { room: this.summary(room), already: false };
+    return { room: this.summary(room), already: false, first };
+  }
+
+  /**
+   * The group encryption of a room moves from epoch `base` to the next one, once: the first commit made on `base` wins, a second one
+   * made on the same epoch is turned down (its author has to catch up on the winner and try again).
+   */
+  advanceEpoch(connectionId, roomId, base) {
+    const room = this.rooms.get(String(roomId));
+    if (!room || !room.members.has(connectionId)) return refusal("not_member", "Join the room first.");
+    if (room.epoch !== base) return { ...refusal("stale_epoch"), epoch: room.epoch };
+    room.epoch++;
+    return { epoch: room.epoch };
   }
 
   /** Takes a person out of a room. The last one out closes it, and its code stops working (unless keepOpen: see unregister). */
@@ -344,19 +353,16 @@ export class Registry {
     return { target: { id: target.id, nickname: target.nickname }, room: this.summary(room) };
   }
 
-  /** A new code for the room: the old one stops working. The people inside are told. */
-  newCode(connectionId, roomId) {
+  /** A new code for the room (its handle; the owner's page chose it): the old one stops working. The people inside are told by the group encryption, not by us. */
+  newHandle(connectionId, roomId, rawHandle) {
     const { room, error, code: errorCode, params } = this.#owned(connectionId, roomId);
     if (error) return { error, code: errorCode, params };
-    let code = this.generate();
-    for (let attempt = 0; this.byCode.has(code); attempt++) {
-      if (attempt > 50) return refusal("code_unavailable", "Could not make a code. Try again.");
-      code = this.generate();
-    }
-    this.byCode.delete(room.code);
-    room.code = code;
+    if (!isHandle(rawHandle)) return refusal("code_invalid");
+    if (this.byHandle.has(rawHandle)) return { ...refusal("code_unavailable", "Could not make a code. Try again."), wrongCode: true };
+    this.byHandle.delete(room.handle);
+    room.handle = rawHandle;
     room.rev++;
-    this.byCode.set(code, room.id);
+    this.byHandle.set(rawHandle, room.id);
     return { room: this.summary(room) };
   }
 
@@ -367,6 +373,6 @@ export class Registry {
 
   #delete(room) {
     this.rooms.delete(room.id);
-    this.byCode.delete(room.code);
+    this.byHandle.delete(room.handle);
   }
 }

@@ -44,7 +44,8 @@ describe('labels', () => {
 
 describe('groupCode', () => {
   it('splits a code in two to be read aloud', () => {
-    expect(groupCode('K7M2QX')).toBe('K7M 2QX')
+    expect(groupCode('K7M2QXAB')).toBe('K7M2 QXAB')
+    expect(groupCode('SHORT')).toBe('SHORT') // not a code: left as it is
   })
 
   it('leaves anything else alone', () => {
@@ -99,12 +100,12 @@ describe('whispers', () => {
 
 describe('invite links', () => {
   it('carry the code after the #, in capitals', () => {
-    expect(inviteLink('K7M2QX', 'https://chat.example/')).toBe('https://chat.example/#/join/K7M2QX')
-    expect(codeFromHash('#/join/k7m2qx')).toBe('K7M2QX')
+    expect(inviteLink('K7M2QXAB', 'https://chat.example/')).toBe('https://chat.example/#/join/K7M2QXAB')
+    expect(codeFromHash('#/join/k7m2qxab')).toBe('K7M2QXAB')
   })
 
   it('are ignored when they are not an invite', () => {
-    for (const hash of ['', '#', '#/join/', '#/join/K7M2Q', '#/join/K7M2QX/extra', '#/other/K7M2QX']) expect(codeFromHash(hash), hash).toBeNull()
+    for (const hash of ['', '#', '#/join/', '#/join/K7M2QXA', '#/join/K7M2QX', '#/join/K7M2QXABC', '#/join/K7M2QXAB/extra', '#/other/K7M2QXAB']) expect(codeFromHash(hash), hash).toBeNull()
   })
 })
 

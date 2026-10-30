@@ -16,11 +16,13 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@noble/hashes": "^2.4.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "ioredis": "^6.0.0",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.0",
     "socket.io-client": "^4.8.0",
+    "ts-mls": "^1.6.4",
     "vue": "^3.5.44"
   },
   "devDependencies": {

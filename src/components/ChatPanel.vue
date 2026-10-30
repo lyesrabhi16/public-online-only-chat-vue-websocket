@@ -69,7 +69,7 @@ watch(
 )
 
 const copyCode = async () => {
-  copied.value = await copyText(props.joined.room.code)
+  copied.value = await copyText(props.joined.code)
   setTimeout(() => (copied.value = false), 1500)
 }
 
@@ -107,7 +107,7 @@ const whisper = (m: Member) => composer.value?.prefill(`/w ${m.nickname} `)
       </div>
       <button type="button" class="code-chip" @click="copyCode">
         <span class="code-label">{{ t('panel.code') }}</span>
-        <strong>{{ groupCode(joined.room.code) }}</strong>
+        <strong>{{ groupCode(joined.code) }}</strong>
         <span class="copy">{{ copied ? t('panel.copied') : t('panel.copy') }}</span>
       </button>
       <button type="button" class="secondary small" @click="showInvite = true">{{ t('panel.invite') }}</button>
@@ -166,7 +166,7 @@ const whisper = (m: Member) => composer.value?.prefill(`/w ${m.nickname} `)
       @problem="(m) => emit('problem', m)"
     />
 
-    <InviteDialog v-if="showInvite" :room-name="joined.room.name" :code="joined.room.code" @close="showInvite = false" />
+    <InviteDialog v-if="showInvite" :room-name="joined.room.name" :code="joined.code" @close="showInvite = false" />
     <div v-if="zoomed" class="overlay lightbox" @click="zoomed = null">
       <img :src="zoomed" :alt="t('msg.photo')" />
       <button type="button" class="link" :aria-label="t('lightbox.close')">✕</button>

@@ -22,6 +22,16 @@ const eventually = async (check, ms = 5000) => {
   }
 };
 const ask = (socket, event, data) => new Promise((resolve) => socket.emit(event, data, resolve));
+// the servers only ever see the handle of a code: any 64 hex digits will do
+let handles = 0;
+const fresh = () => crypto.createHash("sha256").update(`cluster handle ${++handles}`).digest("hex");
+/** Creates a room; it comes back with its handle (the server does not hand it out). */
+const makeRoom = async (socket, name) => {
+  const handle = fresh();
+  const made = await ask(socket, "room:create", { name, handle });
+  expect(made.ok, JSON.stringify(made)).toBe(true);
+  return { ...made.room, handle };
+};
 const record = (socket, event) => {
   const seen = [];
   socket.on(event, (x) => seen.push(x));
@@ -89,19 +99,19 @@ describe.skipIf(!url)("two servers sharing the chat", () => {
     expect((await ask(other, "hello", { nickname: "ada c1" })).code).toBe("nickname_taken");
   });
 
-  it("let somebody join the room of somebody on the other server, with the code", async () => {
+  it("let somebody join the room of somebody on the other server, with the handle", async () => {
     const ada = await person(one, "Ada C2");
     const bob = await person(two, "Bob C2");
-    const room = (await ask(ada, "room:create", { name: "Cluster" })).room;
-    const joined = await ask(bob, "room:join", { code: room.code });
+    const room = await makeRoom(ada, "Cluster");
+    const joined = await ask(bob, "room:join", { handle: room.handle });
     expect(joined.members.map((m) => m.nickname)).toEqual(["Ada C2", "Bob C2"]);
   });
 
   it("carry messages, typing, reactions and whispers between the servers", async () => {
     const [ada, bob, cleo] = [await person(one, "Ada C3"), await person(two, "Bob C3"), await person(one, "Cleo C3")];
-    const room = (await ask(ada, "room:create", { name: "Talk" })).room;
-    await ask(bob, "room:join", { code: room.code });
-    await ask(cleo, "room:join", { code: room.code });
+    const room = await makeRoom(ada, "Talk");
+    await ask(bob, "room:join", { handle: room.handle });
+    await ask(cleo, "room:join", { handle: room.handle });
     const onBob = record(bob, "message"), onAda = record(ada, "message"), typing = record(bob, "typing");
     const reactions = record(ada, "message:reaction"), whispersBob = record(bob, "whisper"), whispersCleo = record(cleo, "whisper");
 
@@ -123,10 +133,10 @@ describe.skipIf(!url)("two servers sharing the chat", () => {
 
   it("announce who comes in and leaves, across servers", async () => {
     const ada = await person(one, "Ada C4");
-    const room = (await ask(ada, "room:create", { name: "Presence" })).room;
+    const room = await makeRoom(ada, "Presence");
     const events = record(ada, "room:event"), members = record(ada, "room:members");
     const bob = await person(two, "Bob C4");
-    await ask(bob, "room:join", { code: room.code });
+    await ask(bob, "room:join", { handle: room.handle });
     await eventually(() => events.at(-1)?.kind === "join" && members.at(-1)?.members.length === 2);
     expect(events.at(-1)).toMatchObject({ kind: "join", nickname: "Bob C4" });
     expect(members.at(-1).members.map((m) => m.nickname)).toEqual(["Ada C4", "Bob C4"]);
@@ -137,12 +147,12 @@ describe.skipIf(!url)("two servers sharing the chat", () => {
 
   it("let the owner on one server lock, remove and re-code for people on the other", async () => {
     const [ada, bob, cleo] = [await person(one, "Ada C5"), await person(two, "Bob C5"), await person(two, "Cleo C5")];
-    const room = (await ask(ada, "room:create", { name: "Owner" })).room;
-    await ask(bob, "room:join", { code: room.code });
+    const room = await makeRoom(ada, "Owner");
+    await ask(bob, "room:join", { handle: room.handle });
     const updates = record(bob, "room:updated"), kicked = record(bob, "room:kicked"), toBob = record(bob, "message");
     expect((await ask(ada, "room:lock", { room: room.id, locked: true })).ok).toBe(true);
     await eventually(() => updates.at(-1)?.room.locked === true);
-    expect((await ask(cleo, "room:join", { code: room.code })).code).toBe("locked");
+    expect((await ask(cleo, "room:join", { handle: room.handle })).code).toBe("locked");
     expect((await ask(ada, "room:lock", { room: room.id, locked: false })).ok).toBe(true);
 
     expect((await ask(ada, "room:kick", { room: room.id, id: bob.id })).ok).toBe(true);
@@ -151,17 +161,18 @@ describe.skipIf(!url)("two servers sharing the chat", () => {
     await ask(ada, "message", { room: room.id, body: "after the removal" });
     await sleep(400);
     expect(toBob).toHaveLength(0); // taken out of the room on the other server too
-    expect((await ask(bob, "room:join", { code: room.code })).code).toBe("banned");
+    expect((await ask(bob, "room:join", { handle: room.handle })).code).toBe("banned");
 
-    const changed = await ask(ada, "room:newcode", { room: room.id });
-    expect((await ask(cleo, "room:join", { code: room.code })).code).toBe("code_unknown");
-    expect((await ask(cleo, "room:join", { code: changed.room.code })).ok).toBe(true);
+    const next = fresh();
+    expect((await ask(ada, "room:newcode", { room: room.id, handle: next })).ok).toBe(true);
+    expect((await ask(cleo, "room:join", { handle: room.handle })).code).toBe("code_unknown");
+    expect((await ask(cleo, "room:join", { handle: next })).ok).toBe(true);
   });
 
   it("hand the room to somebody on the other server when its owner leaves", async () => {
     const [ada, bob] = [await person(one, "Ada C6"), await person(two, "Bob C6")];
-    const room = (await ask(ada, "room:create", { name: "Handover" })).room;
-    await ask(bob, "room:join", { code: room.code });
+    const room = await makeRoom(ada, "Handover");
+    await ask(bob, "room:join", { handle: room.handle });
     const updates = record(bob, "room:updated");
     await ask(ada, "room:leave", { room: room.id });
     await eventually(() => updates.at(-1)?.room.ownerId === bob.id);
@@ -171,14 +182,14 @@ describe.skipIf(!url)("two servers sharing the chat", () => {
 
   it("accept a proof on the other server (they share one secret): edit a message after reconnecting elsewhere", async () => {
     const ada = await person(one, "Ada C7");
-    const room = (await ask(ada, "room:create", { name: "Proofs" })).room;
+    const room = await makeRoom(ada, "Proofs");
     const sent = await ask(ada, "message", { room: room.id, body: "first" });
     ada.close();
     await sleep(500); // the old connection is gone, so the nickname is free
     const back = await person(two, "Ada C7"); // the same person, now on the other server
-    await ask(back, "room:join", { code: room.code });
+    await ask(back, "room:join", { handle: room.handle });
     const bob = await person(one, "Bob C7");
-    await ask(bob, "room:join", { code: room.code });
+    await ask(bob, "room:join", { handle: room.handle });
     const edited = record(bob, "message:edited");
     expect((await ask(back, "message:edit", { room: room.id, id: sent.id, proof: sent.proof, body: "second" })).ok).toBe(true);
     await eventually(() => edited.length === 1);
@@ -187,14 +198,29 @@ describe.skipIf(!url)("two servers sharing the chat", () => {
 
   it("count wrong codes across the servers: trying each in turn does not help", async () => {
     const ada = await person(one, "Ada C8");
-    const room = (await ask(ada, "room:create", { name: "Guess" })).room;
+    const room = await makeRoom(ada, "Guess");
     const guesser1 = await person(one, "Guesser1 C8");
     const guesser2 = await person(two, "Guesser2 C8");
     const answers = [];
-    for (let i = 0; i < LIMITS.wrongCodes; i++) answers.push(await ask(i % 2 ? guesser1 : guesser2, "room:join", { code: `AAAAA${"BCDEFGHJKLMN"[i]}` }));
+    for (let i = 0; i < LIMITS.wrongCodes; i++) answers.push(await ask(i % 2 ? guesser1 : guesser2, "room:join", { handle: fresh() }));
     expect(answers.every((a) => a.code === "code_unknown")).toBe(true);
-    expect((await ask(guesser1, "room:join", { code: room.code })).code).toBe("too_many_wrong_codes");
-    expect((await ask(guesser2, "room:join", { code: room.code })).code).toBe("too_many_wrong_codes");
+    expect((await ask(guesser1, "room:join", { handle: room.handle })).code).toBe("too_many_wrong_codes");
+    expect((await ask(guesser2, "room:join", { handle: room.handle })).code).toBe("too_many_wrong_codes");
+  });
+
+  it("keep one winner when two members on different servers change the group at the same moment", async () => {
+    const [ada, bob] = [await person(one, "Ada C10"), await person(two, "Bob C10")];
+    const room = await makeRoom(ada, "Race");
+    await ask(bob, "room:join", { handle: room.handle });
+    const atAda = record(ada, "mls:commit"), atBob = record(bob, "mls:commit");
+    const answers = await Promise.all([
+      ask(ada, "mls:commit", { room: room.id, base: 0, commit: Buffer.from("from ada").toString("base64") }),
+      ask(bob, "mls:commit", { room: room.id, base: 0, commit: Buffer.from("from bob").toString("base64") }),
+    ]);
+    expect(answers.filter((a) => a.ok)).toHaveLength(1);
+    expect(answers.filter((a) => a.code === "stale_epoch")).toHaveLength(1);
+    await eventually(() => atAda.length + atBob.length === 1); // and only the winner's change is passed on, to the other server's person
+    expect(atAda.length + atBob.length).toBe(1);
   });
 
   it("answer a health check with the same counts, each with its own name", async () => {
@@ -212,9 +238,9 @@ describe.skipIf(!url)("a server that dies", () => {
     const survivor = one;
     const doomed = await startNode("doomed", { heartbeat: false, ttl: 3 });
     const ada = await person(survivor, "Ada D1");
-    const room = (await ask(ada, "room:create", { name: "Crash" })).room;
+    const room = await makeRoom(ada, "Crash");
     const bob = await person(doomed, "Bob D1");
-    await ask(bob, "room:join", { code: room.code });
+    await ask(bob, "room:join", { handle: room.handle });
     const events = record(ada, "room:event"), members = record(ada, "room:members");
 
     // the crash: the server stops without telling the chat anything (its people are not removed, its heartbeat is not renewed)

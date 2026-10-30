@@ -1,19 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { registryContract } from "./registry.contract.js";
-import {
-  CODE_ALPHABET,
-  CODE_LENGTH,
-  FailureLimiter,
-  LIMITS,
-  RateLimiter,
-  Registry,
-  classifyBody,
-  cleanNickname,
-  cleanRoomName,
-  generateCode,
-  isMessageId,
-  normalizeCode,
-} from "./rooms.js";
+import { FailureLimiter, LIMITS, RateLimiter, Registry, classifyBody, cleanNickname, cleanRoomName, isHandle, isMessageId, isMlsText } from "./rooms.js";
 
 describe("nicknames and room names", () => {
   it("nicknames are trimmed and have their spaces collapsed", () => {
@@ -63,25 +50,24 @@ describe("what a message carries", () => {
   });
 });
 
-describe("codes", () => {
-  it("have 6 characters, and none that is easy to mix up", () => {
-    expect(CODE_LENGTH).toBe(6);
-    for (const confusing of "0O1I") expect(CODE_ALPHABET).not.toContain(confusing);
-    for (let i = 0; i < 200; i++) expect(generateCode()).toMatch(/^[A-HJ-NP-Z2-9]{6}$/);
+describe("handles", () => {
+  it("are 64 lowercase hex digits: all the server ever knows of a code", () => {
+    expect(isHandle("0123456789abcdef".repeat(4))).toBe(true);
   });
 
-  it("are random", () => {
-    expect(new Set(Array.from({ length: 500 }, () => generateCode())).size).toBeGreaterThan(495);
+  it.each([[""], ["a".repeat(63)], ["a".repeat(65)], ["A".repeat(64)], ["g".repeat(64)], ["K7M2QXAB"], [123], [null], [{ a: 1 }]])("%j is not a handle", (raw) => {
+    expect(isHandle(raw)).toBe(false);
+  });
+});
+
+describe("messages of the group encryption", () => {
+  it("are base64 text of a sensible size", () => {
+    expect(isMlsText("AAECAw==")).toBe(true);
+    expect(isMlsText("x".repeat(LIMITS.mlsMax))).toBe(true);
   });
 
-  it("are read in any case, with or without separators", () => {
-    expect(normalizeCode("k7m2qx")).toBe("K7M2QX");
-    expect(normalizeCode("  K7M-2QX ")).toBe("K7M2QX");
-    expect(normalizeCode("k7m 2qx")).toBe("K7M2QX");
-  });
-
-  it.each([[""], ["K7M2Q"], ["K7M2QXX"], ["K7M20X"], ["K7M2QI"], ["K7M2Q!"], [123456], [null], [{ a: 1 }]])("%j is not a code", (raw) => {
-    expect(normalizeCode(raw)).toBeNull();
+  it.each([[""], ["x".repeat(LIMITS.mlsMax + 1)], ["not base64!"], [42], [null], [["AAEC"]]])("%j is not one", (raw) => {
+    expect(isMlsText(raw)).toBe(false);
   });
 });
 
@@ -111,13 +97,13 @@ describe("rate limiters", () => {
 });
 
 // What the registry does is in registry.contract.js, which also runs against Redis (redis.test.js).
-registryContract("in memory", (generate) => ({ registry: new Registry(generate) }));
+registryContract("in memory", () => ({ registry: new Registry() }));
 
 describe("the registry in memory", () => {
   it("keeps a count of what is there", () => {
     const r = new Registry();
     r.register("a", "Ada");
-    r.createRoom("a", "One");
+    r.createRoom("a", "One", "a".repeat(64));
     expect(r.stats()).toEqual({ online: 1, rooms: 1 });
   });
 });

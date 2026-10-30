@@ -10,7 +10,7 @@
 import crypto from "node:crypto";
 import { Redis } from "ioredis";
 import { createAdapter } from "@socket.io/redis-adapter";
-import { LIMITS, cleanNickname, cleanRoomName, generateCode, normalizeCode, refusal } from "./rooms.js";
+import { LIMITS, cleanNickname, cleanRoomName, isHandle, refusal } from "./rooms.js";
 
 const GRACE_MS = 70_000; // an emptied room stays a little longer than the server's own 60 s timer, which closes it
 const HEARTBEAT_MS = 5000;
@@ -27,22 +27,22 @@ local function summary(rid)
   if #r == 0 then return nil end
   local h = {}
   for i = 1, #r, 2 do h[r[i]] = r[i + 1] end
-  return { id = rid, name = h.name, code = h.code, members = redis.call('ZCARD', k('m', rid)), locked = h.locked == '1', ownerId = h.owner ~= '' and h.owner or cjson.null, rev = tonumber(h.rev or '0') }
+  return { id = rid, name = h.name, members = redis.call('ZCARD', k('m', rid)), locked = h.locked == '1', ownerId = h.owner ~= '' and h.owner or cjson.null, rev = tonumber(h.rev or '0') }
 end
 
 local function drop(rid)
-  local code = redis.call('HGET', k('r', rid), 'code')
-  if code then redis.call('DEL', k('c', code)) end
+  local handle = redis.call('HGET', k('r', rid), 'handle')
+  if handle then redis.call('DEL', k('h', handle)) end
   redis.call('DEL', k('r', rid), k('m', rid), k('known', rid), k('ban', rid))
   redis.call('SREM', k('rooms', ''), rid)
 end
 
 local function persist(rid)
-  local code = redis.call('HGET', k('r', rid), 'code')
+  local handle = redis.call('HGET', k('r', rid), 'handle')
   redis.call('PERSIST', k('r', rid))
   redis.call('PERSIST', k('known', rid))
   redis.call('PERSIST', k('ban', rid))
-  if code then redis.call('PERSIST', k('c', code)) end
+  if handle then redis.call('PERSIST', k('h', handle)) end
 end
 
 local function leave(conn, rid, keep, grace)
@@ -60,11 +60,11 @@ local function leave(conn, rid, keep, grace)
   local removed = false
   if emptied then
     if keep then
-      local code = redis.call('HGET', k('r', rid), 'code')
+      local handle = redis.call('HGET', k('r', rid), 'handle')
       redis.call('PEXPIRE', k('r', rid), grace)
       redis.call('PEXPIRE', k('known', rid), grace)
       redis.call('PEXPIRE', k('ban', rid), grace)
-      if code then redis.call('PEXPIRE', k('c', code), grace) end
+      if handle then redis.call('PEXPIRE', k('h', handle), grace) end
     else
       drop(rid)
       removed = true
@@ -99,7 +99,7 @@ const SCRIPTS = {
     return cjson.encode({ user = { id = conn, nickname = nick }, left = left })`,
 
   createRoom: `${PRELUDE}
-    local conn, name, code, rid, maxRooms, maxPerUser = ARGV[2], ARGV[3], ARGV[4], ARGV[5], tonumber(ARGV[6]), tonumber(ARGV[7])
+    local conn, name, handle, rid, maxRooms, maxPerUser = ARGV[2], ARGV[3], ARGV[4], ARGV[5], tonumber(ARGV[6]), tonumber(ARGV[7])
     local nick = redis.call('HGET', k('u', conn), 'lower')
     if not nick then return cjson.encode({ err = 'nickname_required' }) end
     if redis.call('SCARD', k('rooms', '')) >= maxRooms then
@@ -109,8 +109,8 @@ const SCRIPTS = {
       if redis.call('SCARD', k('rooms', '')) >= maxRooms then return cjson.encode({ err = 'too_many_rooms' }) end
     end
     if redis.call('SCARD', k('ur', conn)) >= maxPerUser then return cjson.encode({ err = 'rooms_per_user' }) end
-    if not redis.call('SET', k('c', code), rid, 'NX') then return cjson.encode({ err = 'code_collision' }) end
-    redis.call('HSET', k('r', rid), 'name', name, 'code', code, 'owner', conn, 'locked', '0', 'rev', '1')
+    if not redis.call('SET', k('h', handle), rid, 'NX') then return cjson.encode({ err = 'code_unavailable', wrong = true }) end
+    redis.call('HSET', k('r', rid), 'name', name, 'handle', handle, 'epoch', '0', 'owner', conn, 'locked', '0', 'rev', '1')
     redis.call('ZADD', k('m', rid), redis.call('INCR', k('seq', '')), conn)
     redis.call('SADD', k('known', rid), nick)
     redis.call('SADD', k('rooms', ''), rid)
@@ -118,24 +118,26 @@ const SCRIPTS = {
     return cjson.encode({ room = summary(rid) })`,
 
   join: `${PRELUDE}
-    local conn, code, maxMembers, maxPerUser = ARGV[2], ARGV[3], tonumber(ARGV[4]), tonumber(ARGV[5])
+    local conn, handle, maxMembers, maxPerUser = ARGV[2], ARGV[3], tonumber(ARGV[4]), tonumber(ARGV[5])
     local lower = redis.call('HGET', k('u', conn), 'lower')
     if not lower then return cjson.encode({ err = 'nickname_required' }) end
-    local rid = redis.call('GET', k('c', code))
+    local rid = redis.call('GET', k('h', handle))
     if not rid then return cjson.encode({ err = 'code_unknown', wrong = true }) end
-    if redis.call('ZSCORE', k('m', rid), conn) then return cjson.encode({ room = summary(rid), already = true }) end
+    if redis.call('ZSCORE', k('m', rid), conn) then return cjson.encode({ room = summary(rid), already = true, first = false }) end
     if redis.call('SISMEMBER', k('ban', rid), lower) == 1 then return cjson.encode({ err = 'banned' }) end
     if redis.call('HGET', k('r', rid), 'locked') == '1' and redis.call('SISMEMBER', k('known', rid), lower) == 0 then return cjson.encode({ err = 'locked' }) end
     if redis.call('ZCARD', k('m', rid)) >= maxMembers then return cjson.encode({ err = 'room_full' }) end
     if redis.call('SCARD', k('ur', conn)) >= maxPerUser then return cjson.encode({ err = 'rooms_per_user' }) end
     persist(rid)
+    local first = redis.call('ZCARD', k('m', rid)) == 0
+    if first then redis.call('HSET', k('r', rid), 'epoch', '0') end
     redis.call('ZADD', k('m', rid), redis.call('INCR', k('seq', '')), conn)
     redis.call('SADD', k('known', rid), lower)
     redis.call('SADD', k('ur', conn), rid)
     local owner = str(redis.call('HGET', k('r', rid), 'owner'))
     if owner == '' or not redis.call('ZSCORE', k('m', rid), owner) then redis.call('HSET', k('r', rid), 'owner', conn) end
     redis.call('HINCRBY', k('r', rid), 'rev', 1)
-    return cjson.encode({ room = summary(rid), already = false })`,
+    return cjson.encode({ room = summary(rid), already = false, first = first })`,
 
   leave: `${PRELUDE}
     return cjson.encode(leave(ARGV[2], ARGV[3], ARGV[4] == '1', tonumber(ARGV[5])))`,
@@ -164,15 +166,24 @@ const SCRIPTS = {
     leave(target, rid, false, 0)
     return cjson.encode({ target = { id = target, nickname = nick }, room = summary(rid) })`,
 
-  newCode: `${PRELUDE}
-    local conn, rid, code = ARGV[2], ARGV[3], ARGV[4]
+  newHandle: `${PRELUDE}
+    local conn, rid, handle = ARGV[2], ARGV[3], ARGV[4]
     if not redis.call('ZSCORE', k('m', rid), conn) then return cjson.encode({ err = 'not_member' }) end
     if redis.call('HGET', k('r', rid), 'owner') ~= conn then return cjson.encode({ err = 'not_owner' }) end
-    if not redis.call('SET', k('c', code), rid, 'NX') then return cjson.encode({ err = 'code_collision' }) end
-    redis.call('DEL', k('c', redis.call('HGET', k('r', rid), 'code')))
-    redis.call('HSET', k('r', rid), 'code', code)
+    if not redis.call('SET', k('h', handle), rid, 'NX') then return cjson.encode({ err = 'code_unavailable', wrong = true }) end
+    redis.call('DEL', k('h', redis.call('HGET', k('r', rid), 'handle')))
+    redis.call('HSET', k('r', rid), 'handle', handle)
     redis.call('HINCRBY', k('r', rid), 'rev', 1)
     return cjson.encode({ room = summary(rid) })`,
+
+  // the group encryption moves from one epoch to the next, once: the first commit made on an epoch wins
+  advanceEpoch: `${PRELUDE}
+    local conn, rid, base = ARGV[2], ARGV[3], tonumber(ARGV[4])
+    if not redis.call('ZSCORE', k('m', rid), conn) then return cjson.encode({ err = 'not_member' }) end
+    local epoch = tonumber(redis.call('HGET', k('r', rid), 'epoch') or '0')
+    if epoch ~= base then return cjson.encode({ err = 'stale_epoch', epoch = epoch }) end
+    redis.call('HSET', k('r', rid), 'epoch', tostring(epoch + 1))
+    return cjson.encode({ epoch = epoch + 1 })`,
 
   // a counter of wrong codes per address, with an expiry
   fail: `local key, window = ARGV[1], tonumber(ARGV[2])
@@ -187,7 +198,7 @@ const list = (value) => (Array.isArray(value) ? value : []);
 const fix = (result) => {
   if (result.err) {
     const params = result.err === "rooms_per_user" ? { max: LIMITS.roomsPerUser } : {};
-    return { ...refusal(result.err, undefined, params), ...(result.wrong ? { wrongCode: true } : {}) };
+    return { ...refusal(result.err, undefined, params), ...(result.wrong ? { wrongCode: true } : {}), ...(result.epoch !== undefined ? { epoch: result.epoch } : {}) };
   }
   return result;
 };
@@ -195,11 +206,10 @@ const fix = (result) => {
 /** The same methods as Registry (rooms.js), on Redis. Every one of them is asynchronous. */
 export class RedisRegistry {
   /** `prefix` separates this chat from anything else in the same Redis (and tests from each other). */
-  constructor(redis, { instanceId = crypto.randomUUID().slice(0, 8), prefix = "chat:", generate = generateCode } = {}) {
+  constructor(redis, { instanceId = crypto.randomUUID().slice(0, 8), prefix = "chat:" } = {}) {
     this.redis = redis;
     this.instanceId = instanceId;
     this.prefix = prefix;
-    this.generate = generate;
     for (const [name, lua] of Object.entries(SCRIPTS)) {
       if (!redis[`chat_${name}`]) redis.defineCommand(`chat_${name}`, { numberOfKeys: 0, lua });
     }
@@ -237,7 +247,6 @@ export class RedisRegistry {
     return {
       id: roomId,
       name: room.name,
-      code: room.code,
       members: await this.redis.zcard(this.#key("m", roomId)),
       locked: room.locked === "1",
       ownerId: room.owner || null,
@@ -271,25 +280,23 @@ export class RedisRegistry {
     return found ? { id: found.id, nickname: found.nickname } : null;
   }
 
-  async createRoom(connectionId, rawName) {
+  async createRoom(connectionId, rawName, rawHandle) {
     const { value, error, code: errorCode, params } = cleanRoomName(rawName);
     if (error) return { error, code: errorCode, params };
-    for (let attempt = 0; attempt < 50; attempt++) {
-      const result = fix(
-        await this.#run("createRoom", connectionId, value, this.generate(), crypto.randomBytes(6).toString("hex"), LIMITS.rooms, LIMITS.roomsPerUser),
-      );
-      if (result.code !== "code_collision") return result;
-    }
-    return refusal("code_unavailable");
+    if (!isHandle(rawHandle)) return refusal("code_invalid");
+    return fix(await this.#run("createRoom", connectionId, value, rawHandle, crypto.randomBytes(6).toString("hex"), LIMITS.rooms, LIMITS.roomsPerUser));
   }
 
-  async joinWithCode(connectionId, rawCode) {
-    const code = normalizeCode(rawCode);
-    if (!code) {
+  async joinWithHandle(connectionId, rawHandle) {
+    if (!isHandle(rawHandle)) {
       if (!(await this.user(connectionId))) return refusal("nickname_required");
-      return { ...refusal("code_invalid", "That is not a room code. A code has 6 letters and digits."), wrongCode: true };
+      return { ...refusal("code_invalid"), wrongCode: true };
     }
-    return fix(await this.#run("join", connectionId, code, LIMITS.membersPerRoom, LIMITS.roomsPerUser));
+    return fix(await this.#run("join", connectionId, rawHandle, LIMITS.membersPerRoom, LIMITS.roomsPerUser));
+  }
+
+  async advanceEpoch(connectionId, roomId, base) {
+    return fix(await this.#run("advanceEpoch", connectionId, String(roomId), String(Number(base) || 0)));
   }
 
   async leave(connectionId, roomId, { keepOpen = false } = {}) {
@@ -309,12 +316,9 @@ export class RedisRegistry {
     return fix(await this.#run("kick", connectionId, String(roomId), String(targetId)));
   }
 
-  async newCode(connectionId, roomId) {
-    for (let attempt = 0; attempt < 50; attempt++) {
-      const result = fix(await this.#run("newCode", connectionId, String(roomId), this.generate()));
-      if (result.code !== "code_collision") return result;
-    }
-    return refusal("code_unavailable");
+  async newHandle(connectionId, roomId, rawHandle) {
+    if (!isHandle(rawHandle)) return refusal("code_invalid");
+    return fix(await this.#run("newHandle", connectionId, String(roomId), rawHandle));
   }
 
   async stats() {

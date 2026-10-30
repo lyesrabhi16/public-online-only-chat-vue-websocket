@@ -10,15 +10,16 @@ const url = process.env.REDIS_URL;
 const redis = url ? new Redis(url) : null;
 afterAll(() => redis?.quit());
 const prefix = () => `test:${crypto.randomUUID().slice(0, 8)}:`;
+const handle = (digit) => digit.repeat(64);
 
 describe.skipIf(!url)("redis", () => {
-  registryContract("in Redis", (generate) => {
-    const registry = new RedisRegistry(redis, { prefix: prefix(), generate });
+  registryContract("in Redis", () => {
+    const registry = new RedisRegistry(redis, { prefix: prefix() });
     return { registry, cleanup: () => registry.flush() };
   });
 
   describe("a cluster", () => {
-    it("shares everything between servers: a nickname, a room, its code", async () => {
+    it("shares everything between servers: a nickname, a room, its handle", async () => {
       const p = prefix();
       const one = new RedisRegistry(redis, { prefix: p, instanceId: "one" });
       const two = new RedisRegistry(redis, { prefix: p, instanceId: "two" });
@@ -26,8 +27,10 @@ describe.skipIf(!url)("redis", () => {
         await one.register("a", "Ada");
         expect((await two.register("b", "ada")).code).toBe("nickname_taken"); // taken on the other server
         await two.register("b", "Bob");
-        const { room } = await one.createRoom("a", "Shared");
-        expect((await two.joinWithCode("b", room.code)).room.members).toBe(2);
+        const { room } = await one.createRoom("a", "Shared", handle("a"));
+        expect((await two.joinWithHandle("b", handle("a"))).room.members).toBe(2);
+        expect((await two.advanceEpoch("b", room.id, 0))).toEqual({ epoch: 1 }); // the epoch is shared too
+        expect((await one.advanceEpoch("a", room.id, 0)).code).toBe("stale_epoch");
         expect((await one.members(room.id)).map((m) => m.nickname)).toEqual(["Ada", "Bob"]);
         expect((await one.stats())).toEqual({ online: 2, rooms: 1 });
       } finally {
@@ -52,10 +55,10 @@ describe.skipIf(!url)("redis", () => {
       const server = new RedisRegistry(redis, { prefix: p, instanceId: "one" });
       try {
         await server.register("owner", "Owner");
-        const { room } = await server.createRoom("owner", "Rush");
+        const { room } = await server.createRoom("owner", "Rush", handle("a"));
         const people = Array.from({ length: 260 }, (_, i) => `u${i}`);
         await Promise.all(people.map((id, i) => server.register(id, `User ${i}`)));
-        const results = await Promise.all(people.map((id) => server.joinWithCode(id, room.code)));
+        const results = await Promise.all(people.map((id) => server.joinWithHandle(id, handle("a"))));
         expect(results.filter((r) => r.room)).toHaveLength(199); // 200 places, the owner has one
         expect(results.filter((r) => r.code === "room_full")).toHaveLength(61);
         expect((await server.roomSummary(room.id)).members).toBe(200);
@@ -64,15 +67,16 @@ describe.skipIf(!url)("redis", () => {
       }
     }, 60_000);
 
-    it("hands out a code once, even when two servers make rooms at the same moment with the same code", async () => {
+    it("hands out a handle once, even when two servers make rooms at the same moment with the same one", async () => {
       const p = prefix();
-      const make = (id) => new RedisRegistry(redis, { prefix: p, instanceId: id, generate: (() => { const codes = ["AAAAAA", "BBBBBB"]; return () => codes.shift() ?? "CCCCCC"; })() });
-      const one = make("one"), two = make("two");
+      const one = new RedisRegistry(redis, { prefix: p, instanceId: "one" });
+      const two = new RedisRegistry(redis, { prefix: p, instanceId: "two" });
       try {
         await one.register("a", "Ada");
         await two.register("b", "Bob");
-        const [x, y] = await Promise.all([one.createRoom("a", "One"), two.createRoom("b", "Two")]);
-        expect(x.room.code).not.toBe(y.room.code);
+        const results = await Promise.all([one.createRoom("a", "One", handle("a")), two.createRoom("b", "Two", handle("a"))]);
+        expect(results.filter((r) => r.room)).toHaveLength(1);
+        expect(results.filter((r) => r.code === "code_unavailable" && r.wrongCode)).toHaveLength(1);
       } finally {
         await one.flush();
       }
@@ -87,8 +91,8 @@ describe.skipIf(!url)("redis", () => {
         await alive.heartbeat(60);
         await dying.register("a", "Ada");
         await alive.register("b", "Bob");
-        const { room } = await dying.createRoom("a", "Crash");
-        await alive.joinWithCode("b", room.code);
+        const { room } = await dying.createRoom("a", "Crash", handle("a"));
+        await alive.joinWithHandle("b", handle("a"));
         expect(await alive.reapDead()).toEqual([]); // still alive: nothing to do
         await new Promise((r) => setTimeout(r, 1300));
         const reaped = await alive.reapDead();
@@ -124,13 +128,13 @@ describe.skipIf(!url)("redis", () => {
       const server = new RedisRegistry(redis, { prefix: p, instanceId: "one" });
       try {
         await server.register("a", "Ada");
-        const { room } = await server.createRoom("a", "Fading");
+        const { room } = await server.createRoom("a", "Fading", handle("a"));
         await server.unregister("a"); // emptied: kept for a while
         await redis.pexpire(`${p}r:${room.id}`, 1); // the while is over
         await new Promise((r) => setTimeout(r, 20));
         expect(await server.roomSummary(room.id)).toBeNull();
         await server.register("b", "Bob");
-        expect((await server.createRoom("b", "Fresh")).room).toBeTruthy();
+        expect((await server.createRoom("b", "Fresh", handle("b"))).room).toBeTruthy();
       } finally {
         await server.flush();
       }

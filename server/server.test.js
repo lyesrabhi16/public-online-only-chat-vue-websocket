@@ -25,6 +25,10 @@ const record = (socket, event) => {
   return seen;
 };
 const uuid = () => crypto.randomUUID();
+// the server only ever sees the handle of a code: here any 64 hex digits will do
+let handles = 0;
+const fresh = () => crypto.createHash("sha256").update(`handle ${++handles}`).digest("hex");
+const base64 = (text) => Buffer.from(text).toString("base64");
 
 async function person(nickname) {
   const socket = connect(`http://localhost:${port}`, { transports: ["websocket"], reconnection: false });
@@ -37,19 +41,20 @@ async function person(nickname) {
   return socket;
 }
 
-/** `owner` creates a room, `others` come in with its code. */
+/** `owner` creates a room, `others` come in with its handle. The room comes back with the handle (the server does not hand it out). */
 async function roomWith(name, owner, ...others) {
-  const made = await ask(owner, "room:create", { name });
+  const handle = fresh();
+  const made = await ask(owner, "room:create", { name, handle });
   expect(made.ok, JSON.stringify(made)).toBe(true);
-  for (const other of others) expect((await ask(other, "room:join", { code: made.room.code })).ok).toBe(true);
-  return made.room;
+  for (const other of others) expect((await ask(other, "room:join", { handle })).ok).toBe(true);
+  return { ...made.room, handle };
 }
 
 describe("getting in", () => {
   it("needs a nickname before anything else", async () => {
     const s = await person();
-    expect((await ask(s, "room:create", { name: "Room" })).code).toBe("nickname_required");
-    expect((await ask(s, "room:join", { code: "ABCDEF" })).code).toBe("nickname_required");
+    expect((await ask(s, "room:create", { name: "Room", handle: fresh() })).code).toBe("nickname_required");
+    expect((await ask(s, "room:join", { handle: fresh() })).code).toBe("nickname_required");
     expect((await ask(s, "message", { room: "x", body: "hi" })).code).toBe("not_member");
   });
 
@@ -64,11 +69,11 @@ describe("getting in", () => {
 });
 
 describe("rooms and codes", () => {
-  it("a created room has a code, and its creator is inside and runs it", async () => {
+  it("a created room is known by the handle of its code, and its creator is inside and runs it", async () => {
     const ada = await person("Ada R1");
-    const made = await ask(ada, "room:create", { name: "Study group" });
+    const made = await ask(ada, "room:create", { name: "Study group", handle: fresh() });
     expect(made.room).toMatchObject({ name: "Study group", members: 1, locked: false, ownerId: ada.id });
-    expect(made.room.code).toMatch(/^[A-HJ-NP-Z2-9]{6}$/);
+    expect(JSON.stringify(made)).not.toMatch(/[0-9a-f]{64}/); // the handle is not handed back, to anybody
     expect(made.members).toEqual([{ id: ada.id, nickname: "Ada R1", owner: true }]);
   });
 
@@ -77,8 +82,9 @@ describe("rooms and codes", () => {
     const seen = record(bob, "rooms");
     const room = await roomWith("Secret", ada);
     expect((await ask(bob, "room:join", { room: room.id })).code).toBe("code_invalid");
-    expect((await ask(bob, "room:join", { code: "ZZZZZZ" })).code).toBe("code_unknown");
-    const joined = await ask(bob, "room:join", { code: room.code.toLowerCase() });
+    expect((await ask(bob, "room:join", { handle: "K7M2QXAB" })).code).toBe("code_invalid"); // a code, not its handle
+    expect((await ask(bob, "room:join", { handle: fresh() })).code).toBe("code_unknown");
+    const joined = await ask(bob, "room:join", { handle: room.handle });
     expect(joined.members.map((m) => m.nickname)).toEqual(["Ada R2", "Bob R2"]);
     expect(seen).toHaveLength(0);
   });
@@ -103,7 +109,7 @@ describe("rooms and codes", () => {
     await ask(ada, "message", { room: room.id, body: "secret-plan" });
     const late = await person("Late R4");
     const heard = record(late, "message");
-    const joined = await ask(late, "room:join", { code: room.code });
+    const joined = await ask(late, "room:join", { handle: room.handle });
     await sleep(100);
     expect(heard).toHaveLength(0);
     expect(JSON.stringify(joined)).not.toContain("secret-plan");
@@ -113,7 +119,7 @@ describe("rooms and codes", () => {
     const [ada, bob] = [await person("Ada R5"), await person("Bob R5")];
     const room = await roomWith("Private", ada);
     expect((await ask(bob, "message", { room: room.id, body: "let me in" })).code).toBe("not_member");
-    await ask(bob, "room:join", { code: room.code });
+    await ask(bob, "room:join", { handle: room.handle });
     await ask(bob, "room:leave", { room: room.id });
     expect((await ask(bob, "message", { room: room.id, body: "again" })).code).toBe("not_member");
   });
@@ -149,7 +155,7 @@ describe("rooms and codes", () => {
     const room = await roomWith("Presence", ada);
     const events = record(ada, "room:event"), members = record(ada, "room:members");
     const bob = await person("Bob R8");
-    await ask(bob, "room:join", { code: room.code });
+    await ask(bob, "room:join", { handle: room.handle });
     await sleep(100);
     expect(events.at(-1)).toMatchObject({ room: room.id, kind: "join", nickname: "Bob R8" });
     expect(members.at(-1).members.map((m) => m.nickname)).toEqual(["Ada R8", "Bob R8"]);
@@ -173,12 +179,12 @@ describe("rooms and codes", () => {
     const [ada, bob] = [await person("Ada R10"), await person("Bob R10")];
     const room = await roomWith("Closing", ada);
     await ask(ada, "room:leave", { room: room.id });
-    expect((await ask(bob, "room:join", { code: room.code })).code).toBe("code_unknown");
+    expect((await ask(bob, "room:join", { handle: room.handle })).code).toBe("code_unknown");
     const carl = await person("Carl R10");
     const blip = await roomWith("Blip", carl);
     carl.close();
     await sleep(200);
-    expect((await ask(bob, "room:join", { code: blip.code })).ok).toBe(true);
+    expect((await ask(bob, "room:join", { handle: blip.handle })).ok).toBe(true);
   });
 });
 
@@ -271,9 +277,9 @@ describe("running a room", () => {
     expect((await ask(ada, "room:lock", { room: room.id, locked: true })).room.locked).toBe(true);
     await sleep(100);
     expect(updates.at(-1).room.locked).toBe(true);
-    expect((await ask(cleo, "room:join", { code: room.code })).code).toBe("locked");
+    expect((await ask(cleo, "room:join", { handle: room.handle })).code).toBe("locked");
     await ask(ada, "room:lock", { room: room.id, locked: false });
-    expect((await ask(cleo, "room:join", { code: room.code })).ok).toBe(true);
+    expect((await ask(cleo, "room:join", { handle: room.handle })).ok).toBe(true);
   });
 
   it("the owner removes somebody, who is told and cannot come back", async () => {
@@ -288,19 +294,23 @@ describe("running a room", () => {
     await ask(ada, "message", { room: room.id, body: "bye" });
     await sleep(100);
     expect(onBob).toHaveLength(0); // no longer in the room, even for relays
-    expect((await ask(bob, "room:join", { code: room.code })).code).toBe("banned");
+    expect((await ask(bob, "room:join", { handle: room.handle })).code).toBe("banned");
   });
 
   it("a new code locks out the old one, and the room is told", async () => {
     const [ada, bob, cleo] = [await person("Ada O3"), await person("Bob O3"), await person("Cleo O3")];
     const room = await roomWith("Rotate", ada, bob);
     const updates = record(bob, "room:updated");
-    const changed = await ask(ada, "room:newcode", { room: room.id });
+    const next = fresh();
+    expect((await ask(bob, "room:newcode", { room: room.id, handle: fresh() })).code).toBe("not_owner");
+    expect((await ask(ada, "room:newcode", { room: room.id, handle: "short" })).code).toBe("code_invalid");
+    const changed = await ask(ada, "room:newcode", { room: room.id, handle: next });
     await sleep(100);
-    expect(changed.room.code).not.toBe(room.code);
-    expect(updates.at(-1).room.code).toBe(changed.room.code);
-    expect((await ask(cleo, "room:join", { code: room.code })).code).toBe("code_unknown");
-    expect((await ask(cleo, "room:join", { code: changed.room.code })).ok).toBe(true);
+    expect(changed.ok).toBe(true);
+    expect(updates.at(-1).room.rev).toBe(changed.room.rev);
+    expect(JSON.stringify(updates)).not.toContain(next);
+    expect((await ask(cleo, "room:join", { handle: room.handle })).code).toBe("code_unknown");
+    expect((await ask(cleo, "room:join", { handle: next })).ok).toBe(true);
   });
 
   it("when the owner leaves, somebody else takes over, and the room is told", async () => {
@@ -315,12 +325,78 @@ describe("running a room", () => {
   });
 });
 
+describe("the group encryption", () => {
+  it("tells the first person of a room that nobody else is there, and the others that someone is", async () => {
+    const [ada, bob] = [await person("Ada M1"), await person("Bob M1")];
+    const handle = fresh();
+    await ask(ada, "room:create", { name: "Group", handle });
+    expect(await ask(bob, "room:join", { handle })).toMatchObject({ ok: true, first: false });
+    ada.close();
+    bob.close();
+    await sleep(150);
+    const back = await person("Ada M1");
+    expect(await ask(back, "room:join", { handle })).toMatchObject({ ok: true, first: true }); // the group is gone with its members: this person starts it again
+  });
+
+  it("passes a request to come in to the others of the room, never back to the sender, and never outside", async () => {
+    const [ada, bob, eve] = [await person("Ada M2"), await person("Bob M2"), await person("Eve M2")];
+    const room = await roomWith("Requests", ada);
+    await roomWith("Elsewhere", eve);
+    await ask(bob, "room:join", { handle: room.handle });
+    const atAda = record(ada, "mls:request"), atBob = record(bob, "mls:request"), atEve = record(eve, "mls:request");
+    expect(await ask(bob, "mls:request", { room: room.id, keyPackage: base64("kp"), proof: base64("proof") })).toEqual({ ok: true });
+    await sleep(100);
+    expect(atAda).toEqual([{ room: room.id, from: { id: bob.id, nickname: "Bob M2" }, keyPackage: base64("kp"), proof: base64("proof") }]);
+    expect(atBob).toHaveLength(0);
+    expect(atEve).toHaveLength(0);
+  });
+
+  it("refuses a request from outside the room, or one that is not base64 text", async () => {
+    const [ada, bob] = [await person("Ada M3"), await person("Bob M3")];
+    const room = await roomWith("Strict", ada);
+    expect((await ask(bob, "mls:request", { room: room.id, keyPackage: base64("kp"), proof: base64("p") })).code).toBe("not_member");
+    await ask(bob, "room:join", { handle: room.handle });
+    for (const bad of [{ keyPackage: "not base64!", proof: base64("p") }, { keyPackage: base64("kp") }, { keyPackage: "", proof: base64("p") }, { keyPackage: 5, proof: 5 }]) {
+      expect((await ask(bob, "mls:request", { room: room.id, ...bad })).code).toBe("bad_mls");
+    }
+  });
+
+  it("keeps the first change made on an epoch, tells the others, and gives the welcome to the person it is for only", async () => {
+    const [ada, bob, cleo] = [await person("Ada M4"), await person("Bob M4"), await person("Cleo M4")];
+    const room = await roomWith("Commits", ada, bob, cleo);
+    const commitsAtBob = record(bob, "mls:commit"), commitsAtAda = record(ada, "mls:commit");
+    const welcomesAtCleo = record(cleo, "mls:welcome"), welcomesAtBob = record(bob, "mls:welcome");
+    const accepted = await ask(ada, "mls:commit", { room: room.id, base: 0, commit: base64("c1"), welcome: base64("w1"), to: cleo.id });
+    expect(accepted).toEqual({ ok: true, epoch: 1 });
+    const late = await ask(bob, "mls:commit", { room: room.id, base: 0, commit: base64("c2") });
+    expect(late).toMatchObject({ code: "stale_epoch", epoch: 1 });
+    await sleep(100);
+    expect(commitsAtBob).toEqual([{ room: room.id, epoch: 1, commit: base64("c1"), from: { id: ada.id, nickname: "Ada M4" } }]);
+    expect(commitsAtAda).toHaveLength(0); // the author has it already
+    expect(welcomesAtCleo).toEqual([{ room: room.id, epoch: 1, welcome: base64("w1") }]);
+    expect(welcomesAtBob).toHaveLength(0);
+    expect(await ask(bob, "mls:commit", { room: room.id, base: 1, commit: base64("c3") })).toEqual({ ok: true, epoch: 2 });
+  });
+
+  it("refuses a change from outside the room, a welcome for somebody who is not in it, and what is not valid", async () => {
+    const [ada, bob, eve] = [await person("Ada M5"), await person("Bob M5"), await person("Eve M5")];
+    const room = await roomWith("Strict", ada, bob);
+    expect((await ask(eve, "mls:commit", { room: room.id, base: 0, commit: base64("c") })).code).toBe("not_member");
+    expect((await ask(ada, "mls:commit", { room: room.id, base: 0, commit: base64("c"), welcome: base64("w"), to: eve.id })).code).toBe("unknown_target");
+    expect((await ask(ada, "mls:commit", { room: room.id, base: 0, commit: base64("c"), welcome: base64("w") })).code).toBe("unknown_target");
+    for (const bad of [{ base: -1 }, { base: 0.5 }, { base: "0" }, { base: 0, commit: "no!" }, { base: 0, commit: "" }, { base: 0, welcome: "no!", to: bob.id }]) {
+      expect((await ask(ada, "mls:commit", { room: room.id, commit: base64("c"), ...bad })).code).toBe("bad_mls");
+    }
+    expect(await ask(ada, "mls:commit", { room: room.id, base: 0, commit: base64("c") })).toEqual({ ok: true, epoch: 1 }); // none of that moved the epoch
+  });
+});
+
 describe("robustness", () => {
   it("keeps working when a client sends garbage", async () => {
     const ada = await person("Ada Z1");
-    for (const event of ["room:join", "message", "typing", "room:create", "message:edit", "message:react", "whisper", "room:kick"]) ada.emit(event, event.length % 2 ? 42 : null);
+    for (const event of ["room:join", "message", "typing", "room:create", "room:newcode", "message:edit", "message:react", "whisper", "room:kick", "mls:request", "mls:commit"]) ada.emit(event, event.length % 2 ? 42 : null);
     await sleep(200);
-    expect((await ask(ada, "room:create", { name: "Still fine" })).ok).toBe(true);
+    expect((await ask(ada, "room:create", { name: "Still fine", handle: fresh() })).ok).toBe(true);
   });
 
   it("is stopped after too many wrong codes from one address, in its own server", async () => {
@@ -335,13 +411,15 @@ describe("robustness", () => {
     };
     try {
       const ada = await open("Ada G1");
-      const room = (await ask(ada, "room:create", { name: "Guess me" })).room;
+      const handle = fresh();
+      await ask(ada, "room:create", { name: "Guess me", handle });
       const guesser = await open("Guesser G1");
       const answers = [];
-      for (let i = 0; i < LIMITS.wrongCodes + 2; i++) answers.push(await ask(guesser, "room:join", { code: `AAAAA${"BCDEFGHJKLMN"[i]}` }));
+      for (let i = 0; i < LIMITS.wrongCodes + 2; i++) answers.push(await ask(guesser, "room:join", { handle: fresh() }));
       expect(answers.slice(0, LIMITS.wrongCodes).every((a) => a.code === "code_unknown")).toBe(true);
       expect(answers.at(-1).code).toBe("too_many_wrong_codes");
-      expect((await ask(guesser, "room:join", { code: room.code })).code).toBe("too_many_wrong_codes");
+      expect((await ask(guesser, "room:join", { handle })).code).toBe("too_many_wrong_codes");
+      expect((await ask(guesser, "room:create", { name: "Probe", handle: fresh() })).code).toBe("too_many_wrong_codes"); // creating rooms is no way round it
     } finally {
       await own.close();
     }
@@ -357,16 +435,16 @@ describe("addresses behind a proxy", () => {
     await ask(socket, "hello", { nickname });
     return socket;
   };
-  const guess = async (socket, n) => (await ask(socket, "room:join", { code: `AAAAA${"BCDEFGHJKLMNP"[n]}` })).code;
+  const guess = async (socket) => (await ask(socket, "room:join", { handle: fresh() })).code;
 
   it("ignores X-Forwarded-For unless told to trust it: claiming another address does not reset the limit", async () => {
     const own = createChatServer({ corsOrigin: "*" });
     const open = opener(await own.listen(0));
     try {
       const first = await open("1.1.1.1", "Guesser A");
-      for (let i = 0; i < LIMITS.wrongCodes; i++) await guess(first, i);
+      for (let i = 0; i < LIMITS.wrongCodes; i++) await guess(first);
       const second = await open("2.2.2.2", "Guesser B"); // another claimed address, the same real one
-      expect(await guess(second, 0)).toBe("too_many_wrong_codes");
+      expect(await guess(second)).toBe("too_many_wrong_codes");
     } finally {
       await own.close();
     }
@@ -377,9 +455,9 @@ describe("addresses behind a proxy", () => {
     const open = opener(await own.listen(0));
     try {
       const loud = await open("1.1.1.1", "Loud"), quiet = await open("2.2.2.2", "Quiet");
-      for (let i = 0; i < LIMITS.wrongCodes; i++) await ask(loud, "room:join", { code: `AAAAA${"BCDEFGHJKL"[i]}` });
-      expect((await ask(loud, "room:join", { code: "AAAAAM" })).code).toBe("too_many_wrong_codes");
-      expect((await ask(quiet, "room:join", { code: "AAAAAM" })).code).toBe("code_unknown"); // another visitor is not punished
+      for (let i = 0; i < LIMITS.wrongCodes; i++) await ask(loud, "room:join", { handle: fresh() });
+      expect((await ask(loud, "room:join", { handle: fresh() })).code).toBe("too_many_wrong_codes");
+      expect((await ask(quiet, "room:join", { handle: fresh() })).code).toBe("code_unknown"); // another visitor is not punished
     } finally {
       await own.close();
     }
@@ -387,11 +465,11 @@ describe("addresses behind a proxy", () => {
 });
 
 describe("http", () => {
-  it("answers a health check with counts, never names or codes", async () => {
+  it("answers a health check with counts, never names or handles", async () => {
     const body = await (await fetch(`http://localhost:${port}/health`)).json();
     expect(body).toMatchObject({ status: "ok", instance: chat.instanceId });
     expect(typeof body.rooms).toBe("number");
-    expect(JSON.stringify(body)).not.toMatch(/[A-HJ-NP-Z2-9]{6}/);
+    expect(JSON.stringify(body)).not.toMatch(/[0-9a-f]{64}/);
   });
 
   it("is not a web server when there is no built client", async () => {

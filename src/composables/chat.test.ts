@@ -1,14 +1,16 @@
-// The chat store against the real server, with real sockets and real encryption.
+// The chat store against the real server, with real sockets and real encryption (MLS between the pages, Argon2 at the lowest cost).
 import { io as connect } from 'socket.io-client'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { createChatServer } from '../../server/index.js'
-import { deriveKey, encrypt } from '../crypto'
+import { deriveSecrets, prove, toBase64, type Secrets } from '../crypto'
 import { locale } from '../i18n'
+import { Group, newCandidate } from '../mls'
 import type { Msg } from '../types'
 import { createChat, type Chat } from './chat'
 
 let server: ReturnType<typeof createChatServer>
 let url: string
+const cheap = { t: 1, m: 8 } // the real cost is about a second a code
 const chats: Chat[] = []
 const raw: ReturnType<typeof connect>[] = []
 
@@ -33,18 +35,18 @@ const until = async (check: () => boolean, ms = 4000) => {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function person(nickname: string, invite: string | null = null) {
-  const chat = createChat(url, connect, invite)
+  const chat = createChat(url, connect, invite, { cost: cheap })
   chats.push(chat)
   expect(await chat.login(nickname)).toBe('')
   return chat
 }
 
-/** `owner` makes a room; the others come in with its code. */
+/** `owner` makes a room; the others come in with its code. The room comes back with its code (the server does not know it). */
 async function roomWith(name: string, owner: Chat, ...others: Chat[]) {
   expect(await owner.create(name)).toBe('')
-  const room = owner.state.joined[owner.state.active!].room
-  for (const other of others) expect(await other.join(room.code)).toBe('')
-  return room
+  const joined = owner.state.joined[owner.state.active!]
+  for (const other of others) expect(await other.join(joined.code)).toBe('')
+  return { ...joined.room, code: joined.code }
 }
 
 const messages = (chat: Chat, roomId: string): Msg[] =>
@@ -52,17 +54,43 @@ const messages = (chat: Chat, roomId: string): Msg[] =>
 const lastText = (chat: Chat, roomId: string) => messages(chat, roomId).at(-1)?.text
 const arrived = (chat: Chat, roomId: string, text: string) => until(() => messages(chat, roomId).some((m) => m.text === text))
 
-/** A bare connection that is in the room and sees what the server sees. */
+const ask = <T = Record<string, any>>(socket: ReturnType<typeof connect>, event: string, data: unknown) => new Promise<T>((r) => socket.emit(event, data, r))
+
+/** A bare connection that is in the room (it knows the code) and sees what the server sees, but is never let into the group. */
 async function eavesdropper(code: string, nickname = 'Spy') {
   const socket = connect(url, { transports: ['websocket'], reconnection: false })
   raw.push(socket)
   await new Promise<void>((r) => socket.on('connect', () => r()))
-  await new Promise((r) => socket.emit('hello', { nickname }, r))
+  await ask(socket, 'hello', { nickname })
   const seen: { body: string }[] = []
   socket.on('message', (m) => seen.push(m))
-  const joined = await new Promise<{ ok: boolean; room: { id: string } }>((r) => socket.emit('room:join', { code }, r))
-  return { socket, seen, roomId: joined.room.id }
+  const secrets = await deriveSecrets(code, cheap)
+  const joined = await ask<{ ok: boolean; room: { id: string } }>(socket, 'room:join', { handle: secrets.handle })
+  return { socket, seen, roomId: joined.room.id, secrets }
 }
+
+/** Somebody who knows the code and is let into the group like anyone, but writes whatever they like: the page of everyone else must cope. */
+async function insider(code: string, nickname: string) {
+  const socket = connect(url, { transports: ['websocket'], reconnection: false })
+  raw.push(socket)
+  await new Promise<void>((r) => socket.on('connect', () => r()))
+  const hello = await ask<{ user: { id: string } }>(socket, 'hello', { nickname })
+  const secrets = await deriveSecrets(code, cheap)
+  const joined = await ask<{ ok: boolean; room: { id: string } }>(socket, 'room:join', { handle: secrets.handle })
+  const roomId = joined.room.id
+  const candidate = await newCandidate({ id: hello.user.id, nickname })
+  const welcome = new Promise<string>((r) => socket.once('mls:welcome', (e: { welcome: string }) => r(e.welcome)))
+  const commits: { epoch: number; commit: string }[] = []
+  socket.on('mls:commit', (e) => commits.push(e))
+  const bodies: string[] = []
+  socket.on('message', (m) => bodies.push(m.body))
+  await ask(socket, 'mls:request', { room: roomId, keyPackage: toBase64(candidate.encoded), proof: prove(secrets.admissionKey, candidate.encoded) })
+  const group = await Group.join(candidate, await welcome, secrets.handle, secrets.psk)
+  return { socket, group, roomId, id: hello.user.id, commits, bodies }
+}
+
+/** What the server has about a room: the in-memory registry of the test server. */
+const serverRoom = (roomId: string) => (server.registry as unknown as { rooms: Map<string, { epoch: number; handle: string }> }).rooms.get(roomId)!
 
 describe('getting in', () => {
   it('logs in with no room yet, and shows refusals in the language of the page', async () => {
@@ -92,7 +120,7 @@ describe('getting in', () => {
   })
 
   it('shows the refusal when the invite link has a wrong code', async () => {
-    const bob = await person('Bob S2b', 'ZZZZZZ')
+    const bob = await person('Bob S2b', 'ZZZZZZZZ')
     expect(bob.state.error).toMatch(/No room has this code/)
     expect(bob.state.joined).toEqual({})
   })
@@ -102,11 +130,12 @@ describe('rooms', () => {
   it('creates a room that you run, with a code, and lets people in with it only', async () => {
     const [ada, bob] = [await person('Ada S3'), await person('Bob S3')]
     const room = await roomWith('Private S3', ada)
-    expect(room.code).toMatch(/^[A-HJ-NP-Z2-9]{6}$/)
+    expect(room.code).toMatch(/^[A-HJ-NP-Z2-9]{8}$/)
     expect(room.ownerId).toBe(ada.state.me!.id)
-    expect(await bob.join('ZZZZZZ')).toMatch(/No room/)
+    expect(await bob.join('ZZZZZZZZ')).toMatch(/No room/)
     expect(await bob.join('nope')).toMatch(/not a room code/)
-    expect(await bob.join(room.code.toLowerCase())).toBe('')
+    expect(await bob.join(room.code.slice(0, 7))).toMatch(/not a room code/)
+    expect(await bob.join(`${room.code.slice(0, 4)}-${room.code.slice(4)}`.toLowerCase())).toBe('')
     await until(() => ada.state.joined[room.id].members.length === 2)
     expect(ada.state.joined[room.id].room.members).toBe(2)
   })
@@ -152,11 +181,10 @@ describe('what is said', () => {
   it('shows what an unreadable message is, instead of showing it', async () => {
     const [ada, bob] = [await person('Ada S8'), await person('Bob S8')]
     const room = await roomWith('Bad S8', ada, bob)
-    const key = await deriveKey(room.code)
-    const spy = await eavesdropper(room.code, 'Mallory')
+    const mallory = await insider(room.code, 'Mallory') // a member, so these are well encrypted: what is inside is not to be trusted
     const send = async (payload: unknown) => {
-      const body = await encrypt(key, payload)
-      return new Promise((r) => spy.socket.emit('message', { room: spy.roomId, body }, r))
+      const body = await mallory.group.seal(new TextEncoder().encode(JSON.stringify(payload)))
+      return ask(mallory.socket, 'message', { room: mallory.roomId, body })
     }
     const bad = [
       { k: 'image', src: 'data:text/html;base64,PHNjcmlwdD4=', w: 1, h: 1 }, // not an image
@@ -169,10 +197,21 @@ describe('what is said', () => {
     const received = messages(bob, room.id)
     expect(received).toHaveLength(bad.length)
     expect(received.every((m) => m.unreadable && !m.src)).toBe(true)
-    // and a body that is not encrypted with the room key is unreadable too
-    await new Promise((r) => spy.socket.emit('message', { room: spy.roomId, body: 'plain text, not encrypted' }, r))
+    // and a body that is not encrypted for the group is unreadable too
+    await ask(mallory.socket, 'message', { room: mallory.roomId, body: 'plain text, not encrypted' })
     await until(() => messages(bob, room.id).length === bad.length + 1)
     expect(messages(bob, room.id).at(-1)!.unreadable).toBe(true)
+  })
+
+  it('does not show what somebody sent who knows the code but was never let into the group', async () => {
+    const [ada, bob] = [await person('Ada S8b'), await person('Bob S8b')]
+    const room = await roomWith('Outsider S8b', ada, bob)
+    const spy = await eavesdropper(room.code, 'Mallory')
+    await ask(spy.socket, 'message', { room: spy.roomId, body: 'AAAA' })
+    await ask(spy.socket, 'message', { room: spy.roomId, body: 'not a group message at all' })
+    await sleep(500)
+    expect(messages(bob, room.id).every((m) => m.unreadable)).toBe(true)
+    expect(messages(ada, room.id).every((m) => m.unreadable)).toBe(true)
   })
 
   it('carries photos and voice messages', async () => {
@@ -321,20 +360,37 @@ describe('running a room', () => {
     await until(() => ada.state.joined[room.id].members.length === 1)
   })
 
-  it('changes the key with the code: those inside keep talking, the old code is useless', async () => {
-    const [ada, bob, cleo] = [await person('Ada S20'), await person('Bob S20'), await person('Cleo S20')]
+  it('changes the code: those inside keep talking and learn it through the group, the old code finds nothing, the new one lets people in', async () => {
+    const [ada, bob, cleo, dina] = [await person('Ada S20'), await person('Bob S20'), await person('Cleo S20'), await person('Dina S20')]
     const room = await roomWith('Rotate S20', ada, bob)
-    const oldCode = room.code // the room object itself is updated in place
+    const oldCode = room.code
     expect(await ada.newCode()).toBe('')
-    await until(() => bob.state.joined[room.id].room.code !== oldCode)
-    const code = ada.state.joined[room.id].room.code
-    await until(() => ada.state.joined[room.id].room.code === code)
-    await sleep(300) // the new key is derived
+    const code = ada.state.joined[room.id].code
+    expect(code).not.toBe(oldCode)
+    await until(() => bob.state.joined[room.id].code === code)
     await ada.send('after the change')
     await arrived(bob, room.id, 'after the change')
     expect(bob.state.joined[room.id].lines.some((l) => l.kind === 'event' && l.key === 'event.newCode')).toBe(true)
+    expect(messages(bob, room.id).some((m) => m.text.includes(code))).toBe(false) // the news of the code is not a message
     expect(await cleo.join(oldCode)).toMatch(/No room has this code/)
-    expect(await cleo.join(code)).toBe('')
+    expect(await cleo.join(code)).toBe('') // and Bob, who learnt the code, let her in as well as Ada would
+    await bob.send('hello Cleo')
+    await arrived(cleo, room.id, 'hello Cleo')
+    await ada.leave(room.id)
+    await until(() => bob.state.joined[room.id].room.ownerId === bob.state.me!.id)
+    expect(await dina.join(code)).toBe('') // Bob has the new code too, and looks after the group now
+  })
+
+  it('only takes a new code from the person who runs the room', async () => {
+    const [ada, bob] = [await person('Ada S20b'), await person('Bob S20b')]
+    const room = await roomWith('Rotate S20b', ada, bob)
+    const before = bob.state.joined[room.id].code
+    // Ada is the owner: a member who is not cannot make the others change the code, even with a well-formed message
+    const mallory = await insider(room.code, 'Mallory S20b')
+    await ask(mallory.socket, 'message', { room: mallory.roomId, body: await mallory.group.seal(new TextEncoder().encode(JSON.stringify({ k: 'code', code: 'ZZZZZZZZ' }))) })
+    await sleep(500)
+    expect(bob.state.joined[room.id].code).toBe(before)
+    expect(ada.state.joined[room.id].code).toBe(before)
   })
 
   it('hands the room to somebody else when its owner leaves', async () => {
@@ -356,10 +412,148 @@ describe('the connection', () => {
     })
     await until(() => ada.state.status === 'offline')
     await until(() => ada.state.status === 'online' && !!ada.state.joined[room.id]?.lines.some((l) => l.kind === 'event' && l.key === 'event.back'))
-    expect(ada.state.joined[room.id].room.code).toBe(room.code)
+    expect(ada.state.joined[room.id].code).toBe(room.code)
     expect(await ada.send('I am back')).toBe('')
     await arrived(bob, room.id, 'I am back')
   })
+})
+
+describe('the group encryption', () => {
+  it('never lets the server learn the code: it holds a handle, and the handle is not the code', async () => {
+    const [ada, bob] = [await person('Ada G1'), await person('Bob G1')]
+    const room = await roomWith('Secret G1', ada, bob)
+    await ada.send('hello')
+    await arrived(bob, room.id, 'hello')
+    const held = serverRoom(room.id)
+    const everything = JSON.stringify([...(server.registry as unknown as { rooms: Map<string, unknown> }).rooms.values()], (_, v) => (v instanceof Set ? [...v] : v))
+    expect(held.handle).toMatch(/^[0-9a-f]{64}$/)
+    expect(held.handle).toBe((await deriveSecrets(room.code, cheap)).handle)
+    expect(everything.toUpperCase()).not.toContain(room.code)
+  })
+
+  it('moves the group one step for each person who comes in', async () => {
+    const [ada, bob, cleo] = [await person('Ada G2'), await person('Bob G2'), await person('Cleo G2')]
+    const room = await roomWith('Steps G2', ada)
+    expect(serverRoom(room.id).epoch).toBe(0)
+    await bob.join(room.code)
+    expect(serverRoom(room.id).epoch).toBe(1)
+    await cleo.join(room.code)
+    expect(serverRoom(room.id).epoch).toBe(2)
+    await cleo.send('three of us')
+    await arrived(ada, room.id, 'three of us')
+    await arrived(bob, room.id, 'three of us')
+  })
+
+  it('does not let in somebody who asks with a proof of a code they do not know', async () => {
+    const [ada, bob] = [await person('Ada G3'), await person('Bob G3')]
+    const room = await roomWith('Proof G3', ada, bob)
+    const spy = await eavesdropper(room.code, 'Mallory G3') // in the room on the server (it has the handle), but no proof is good
+    const candidate = await newCandidate({ id: spy.socket.id!, nickname: 'Mallory G3' })
+    const welcomes: unknown[] = []
+    spy.socket.on('mls:welcome', (w) => welcomes.push(w))
+    const wrong = await deriveSecrets('ZZZZZZZZ', cheap)
+    await ask(spy.socket, 'mls:request', { room: spy.roomId, keyPackage: toBase64(candidate.encoded), proof: prove(wrong.admissionKey, candidate.encoded) })
+    await ask(spy.socket, 'mls:request', { room: spy.roomId, keyPackage: toBase64(candidate.encoded), proof: toBase64(new Uint8Array(32)) })
+    // and a proof that is good, but for another key package, cannot be moved onto this one
+    const other = await newCandidate({ id: spy.socket.id!, nickname: 'Mallory G3' })
+    await ask(spy.socket, 'mls:request', { room: spy.roomId, keyPackage: toBase64(candidate.encoded), proof: prove(spy.secrets.admissionKey, other.encoded) })
+    await sleep(800)
+    expect(welcomes).toHaveLength(0)
+    expect(serverRoom(room.id).epoch).toBe(1) // Bob came in: nothing since
+    await ada.send('still just us')
+    await arrived(bob, room.id, 'still just us')
+  })
+
+  it('lets in several people who arrive at the same moment', async () => {
+    const people = await Promise.all(['Ada G4', 'Bob G4', 'Cleo G4', 'Dina G4', 'Eli G4'].map((n) => person(n)))
+    const [ada, ...others] = people
+    const room = await roomWith('Rush G4', ada)
+    const results = await Promise.all(others.map((p) => p.join(room.code)))
+    expect(results).toEqual(['', '', '', ''])
+    expect(serverRoom(room.id).epoch).toBe(4)
+    for (const [i, p] of people.entries()) await p.send(`hello from ${i}`)
+    for (const p of people) for (let i = 0; i < people.length; i++) await arrived(p, room.id, `hello from ${i}`)
+  })
+
+  it('takes the people who left out of the group, and the others carry on', async () => {
+    const [ada, bob, cleo] = [await person('Ada G5'), await person('Bob G5'), await person('Cleo G5')]
+    const room = await roomWith('Leave G5', ada, bob, cleo)
+    expect(serverRoom(room.id).epoch).toBe(2)
+    await bob.leave(room.id)
+    await until(() => serverRoom(room.id).epoch === 3) // Ada, who looks after the group, took Bob out
+    await ada.send('after Bob')
+    await arrived(cleo, room.id, 'after Bob')
+    await ada.leave(room.id)
+    await until(() => serverRoom(room.id).epoch === 4) // and Cleo took Ada out
+    expect(await cleo.send('only me')).toBe('')
+  })
+
+  it('takes out a person whose connection dropped, not only those who left on purpose, and lets their page back in', async () => {
+    const [ada, bob] = [await person('Ada G6'), await person('Bob G6')]
+    const room = await roomWith('Drop G6', ada, bob)
+    server.io.sockets.sockets.forEach((s) => {
+      if (s.id === bob.state.me?.id) s.conn.close()
+    })
+    await until(() => serverRoom(room.id).epoch >= 3) // Bob went (epoch 2), and his page came back as a new member (3)
+    await until(() => bob.state.status === 'online' && !!bob.state.joined[room.id]?.lines.some((l) => l.kind === 'event' && l.key === 'event.back'))
+    expect(await bob.send('back again')).toBe('')
+    await arrived(ada, room.id, 'back again')
+  })
+
+  it('stops a member who was removed from following the group', async () => {
+    const [ada, bob] = [await person('Ada G7'), await person('Bob G7')]
+    const room = await roomWith('Kick G7', ada, bob)
+    const mallory = await insider(room.code, 'Mallory G7')
+    const spy = await eavesdropper(room.code, 'Eve G7') // still in the room: sees what the server relays, and hands it to Mallory
+    const commits: { epoch: number; commit: string }[] = []
+    spy.socket.on('mls:commit', (c) => commits.push(c))
+    expect(await ada.kick(mallory.id)).toBe('')
+    await until(() => serverRoom(room.id).epoch >= 3 && commits.length > 0) // Ada took them out of the group
+    const bodiesBefore = mallory.bodies.length
+    expect(await ada.send('after the removal')).toBe('')
+    await arrived(bob, room.id, 'after the removal')
+    await until(() => spy.seen.length > 0)
+    await sleep(300)
+    expect(mallory.bodies.length).toBe(bodiesBefore) // the server no longer sends it to them
+    // even if they get hold of what was relayed, they cannot read it: it is for an epoch they are not in
+    await expect(mallory.group.open(spy.seen.at(-1)!.body)).rejects.toThrow()
+    // and the commit that removed them takes them out of their own copy of the group as well
+    for (const c of commits) await mallory.group.follow(c.commit).catch(() => {})
+    expect(mallory.group.active).toBe(false)
+    await expect(mallory.group.open(spy.seen.at(-1)!.body)).rejects.toThrow()
+  })
+
+  it('starts the group again for the first person to come back to a room that emptied', async () => {
+    const ada = await person('Ada G8')
+    const room = await roomWith('Blip G8', ada)
+    server.io.sockets.sockets.forEach((s) => {
+      if (s.id === ada.state.me?.id) s.conn.close()
+    })
+    await until(() => ada.state.status === 'offline')
+    await until(() => ada.state.status === 'online' && !!ada.state.joined[room.id]?.lines.some((l) => l.kind === 'event' && l.key === 'event.back'))
+    expect(await ada.send('alone but back')).toBe('')
+    const bob = await person('Bob G8')
+    expect(await bob.join(room.code)).toBe('')
+    await ada.send('hello Bob')
+    await arrived(bob, room.id, 'hello Bob')
+  })
+
+  it('tells somebody when nobody lets them in, instead of leaving them waiting, and takes them out of the room again', async () => {
+    // a room whose only member never answers: it is a bare connection that does not run the group
+    const ghost = connect(url, { transports: ['websocket'], reconnection: false })
+    raw.push(ghost)
+    await new Promise<void>((r) => ghost.on('connect', () => r()))
+    await ask(ghost, 'hello', { nickname: 'Ghost G9' })
+    const secrets: Secrets = await deriveSecrets('K7M2QXAB', cheap)
+    const made = await ask<{ room: { id: string } }>(ghost, 'room:create', { name: 'Away G9', handle: secrets.handle })
+    const bob = createChat(url, connect, null, { cost: cheap, admissionMs: 600, requestEveryMs: 200 })
+    chats.push(bob)
+    expect(await bob.login('Bob G9')).toBe('')
+    expect(await bob.join('K7M2QXAB')).toMatch(/Nobody in the room let you in/)
+    expect(bob.state.joined).toEqual({})
+    await until(() => (server.registry as unknown as { rooms: Map<string, { members: Set<string> }> }).rooms.get(made.room.id)!.members.size === 1)
+  })
+
 })
 
 /** A socket that only does what a test tells it to: events arrive when the test says so. */
@@ -385,17 +579,17 @@ class ControlledSocket {
 }
 
 describe('a description of the room that arrives late', () => {
-  const room = { id: 'r1', name: 'Study', code: 'K7M2QX', members: 2, locked: false, ownerId: 'a', rev: 5 }
+  const room = { id: 'r1', name: 'Study', members: 2, locked: false, ownerId: 'a', rev: 5 }
 
   async function inRoom() {
     const socket = new ControlledSocket()
     socket.answers = {
       hello: { ok: true, user: { id: 'me', nickname: 'Me' } },
-      'room:join': { ok: true, room: { ...room }, members: [{ id: 'a', nickname: 'Ada', owner: true }, { id: 'me', nickname: 'Me' }] },
+      'room:join': { ok: true, first: true, room: { ...room }, members: [{ id: 'a', nickname: 'Ada', owner: true }, { id: 'me', nickname: 'Me' }] },
     }
-    const chat = createChat('http://nowhere', (() => socket) as never)
+    const chat = createChat('http://nowhere', (() => socket) as never, null, { cost: cheap })
     expect(await chat.login('Me')).toBe('')
-    expect(await chat.join('K7M2QX')).toBe('')
+    expect(await chat.join('K7M2QXAB')).toBe('')
     return { chat, socket }
   }
 
@@ -407,11 +601,11 @@ describe('a description of the room that arrives late', () => {
     expect(chat.state.joined.r1.lines.filter((l) => l.kind === 'event' && l.key === 'event.unlocked')).toHaveLength(0)
   })
 
-  it('does not bring back an old code either', async () => {
+  it('does not bring back an old owner either', async () => {
     const { chat, socket } = await inRoom()
-    socket.arrives('room:updated', { room: { ...room, code: 'NEWCOD', rev: 8 } })
+    socket.arrives('room:updated', { room: { ...room, ownerId: 'me', rev: 8 } })
     socket.arrives('room:updated', { room: { ...room, rev: 6 } })
-    expect(chat.state.joined.r1.room.code).toBe('NEWCOD')
+    expect(chat.state.joined.r1.room.ownerId).toBe('me')
   })
 
   it('still applies updates that are newer, or the same', async () => {

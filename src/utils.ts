@@ -25,9 +25,9 @@ export function typingLabel(names: string[]): string {
   return t('panel.typingMany')
 }
 
-/** "K7M2QX" is easier to read and to dictate as "K7M 2QX". */
+/** "K7M2QXAB" is easier to read and to dictate as "K7M2 QXAB". */
 export function groupCode(code: string): string {
-  return code.length === 6 ? `${code.slice(0, 3)} ${code.slice(3)}` : code
+  return code.length === 8 ? `${code.slice(0, 4)} ${code.slice(4)}` : code
 }
 
 /** Copies text to the clipboard. Falls back to a temporary text field where the clipboard API is not available (a page served over plain http). */
@@ -95,9 +95,9 @@ export function parseWhisper(line: string, nicknames: string[]): { to: string; t
   return null
 }
 
-/** The code in a link such as https://site/#/join/K7M2QX, or null. */
+/** The code in a link such as https://site/#/join/K7M2QXAB, or null. */
 export function codeFromHash(hash: string): string | null {
-  const match = /^#\/join\/([A-Za-z0-9]{6})$/.exec(hash)
+  const match = /^#\/join\/([A-Za-z0-9]{8})$/.exec(hash)
   return match ? match[1].toUpperCase() : null
 }
 

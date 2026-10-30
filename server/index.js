@@ -1,13 +1,15 @@
-// The Socket.IO server. A room is entered with its code. It relays messages between the people in a room and keeps no history at all:
+// The Socket.IO server. A room is entered with its code, but this server never sees the code: it only knows the room's "handle", a hash
+// that the page makes of the code (see src/crypto.ts). It relays messages between the people in a room and keeps no history at all:
 // a person who joins late (or reconnects) sees nothing of what was said before.
-// What people write is encrypted by their pages with a key made from the room code, so this server relays it and measures it (it does see the room code, from which the key is made: see README, "Encryption").
+// What people write is encrypted by their pages with MLS (RFC 9420), a group encryption whose keys the members agree on among themselves.
+// This server only relays those exchanges (key packages, commits, welcomes) and puts them in order; it cannot read a message (see README, "Encryption").
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { Server } from "socket.io";
 import { createProofs } from "./proof.js";
-import { EMOJIS, FailureLimiter, LIMITS, RateLimiter, Registry, classifyBody, isMessageId, refusal } from "./rooms.js";
+import { EMOJIS, FailureLimiter, LIMITS, RateLimiter, Registry, classifyBody, isMessageId, isMlsText, refusal } from "./rooms.js";
 
 const GRACE_MS = 60_000; // how long a room stays open after its last person was disconnected
 
@@ -61,7 +63,7 @@ export function createChatServer({
   corsOrigin = "http://localhost:5173,http://127.0.0.1:5173",
   staticDir,
   registry = new Registry(),
-  wrongCodes = new FailureLimiter(), // by address: stops anybody from trying codes one after the other
+  wrongCodes = new FailureLimiter(), // by address: stops anybody from trying handles one after the other
   proofs = createProofs(),
   attach,
   instanceId = crypto.randomUUID().slice(0, 8),
@@ -132,24 +134,32 @@ export function createChatServer({
       reply(ack, { ok: true, user: { id: user.id, nickname: user.nickname }, instance: instanceId });
     });
 
-    // A new room: its creator is inside it and runs it, and gets its code, to share with whoever should come in.
+    const addressOf = (socket) => (trustProxy && String(socket.handshake.headers["x-forwarded-for"] ?? "").split(",")[0].trim()) || socket.handshake.address;
+    /** Handles tried one after the other are what a guesser does: every try is counted, whether it is to join, to create or to change the code. */
+    const tooManyTries = async () => (await wrongCodes.blocked(addressOf(socket))) && refusal("too_many_wrong_codes", "Too many wrong codes. Wait a few minutes before trying again.");
+
+    // A new room: its creator is inside it and runs it. The page chose the code and sends its handle only; it is the creator who starts the group encryption.
     socket.on("room:create", async (data, ack) => {
-      const { room, error, code, params } = await registry.createRoom(socket.id, payload(data).name);
+      const { name, handle } = payload(data);
+      const blocked = await tooManyTries();
+      if (blocked) return refuse(ack, blocked);
+      const { room, error, code, params, wrongCode } = await registry.createRoom(socket.id, name, handle);
+      if (wrongCode) await wrongCodes.fail(addressOf(socket));
       if (error) return refuse(ack, { error, code, params });
       socket.join(key(room.id));
       reply(ack, { ok: true, room, members: await registry.members(room.id) });
     });
 
-    // The only way into a room: its code.
+    // The only way into a room: the handle of its code. `first` says nobody else is in it: this person starts the group encryption.
     socket.on("room:join", async (data, ack) => {
       if (!(await registry.user(socket.id))) return refuse(ack, refusal("nickname_required", "Choose a nickname first."));
-      const address = (trustProxy && String(socket.handshake.headers["x-forwarded-for"] ?? "").split(",")[0].trim()) || socket.handshake.address;
-      if (await wrongCodes.blocked(address)) return refuse(ack, refusal("too_many_wrong_codes", "Too many wrong codes. Wait a few minutes before trying again."));
-      const { room, error, code, params, already, wrongCode } = await registry.joinWithCode(socket.id, payload(data).code);
-      if (wrongCode) await wrongCodes.fail(address);
+      const blocked = await tooManyTries();
+      if (blocked) return refuse(ack, blocked);
+      const { room, error, code, params, already, first, wrongCode } = await registry.joinWithHandle(socket.id, payload(data).handle);
+      if (wrongCode) await wrongCodes.fail(addressOf(socket));
       if (error) return refuse(ack, { error, code, params });
       socket.join(key(room.id));
-      reply(ack, { ok: true, room, members: await registry.members(room.id) });
+      reply(ack, { ok: true, room, first: first === true, members: await registry.members(room.id) });
       if (!already) {
         announceEvent(room.id, "join", (await registry.user(socket.id)).nickname);
         await announceMembers(room.id);
@@ -183,11 +193,43 @@ export function createChatServer({
       reply(ack, { ok: true });
     });
 
+    // The owner's page made a new code and sends its handle. The members learn the code itself through the group encryption, not from us.
     socket.on("room:newcode", async (data, ack) => {
-      const result = await registry.newCode(socket.id, String(payload(data).room));
+      const { room, handle } = payload(data);
+      const blocked = await tooManyTries();
+      if (blocked) return refuse(ack, blocked);
+      const result = await registry.newHandle(socket.id, String(room), handle);
+      if (result.wrongCode) await wrongCodes.fail(addressOf(socket));
       if (result.error) return refuse(ack, result);
       announceRoom(result.room);
       reply(ack, { ok: true, room: result.room });
+    });
+
+    // ---- the group encryption (MLS): the server relays and orders, and cannot read any of it
+    // Somebody who just came in asks the members to let them into the group: their key package, and a proof that they know the code.
+    socket.on("mls:request", async (data, ack) => {
+      const { room, keyPackage, proof } = payload(data);
+      const user = await inRoom(room);
+      if (!user) return refuse(ack, joinFirst);
+      if (!isMlsText(keyPackage) || !isMlsText(proof)) return refuse(ack, refusal("bad_mls"));
+      if (!small.allow()) return refuse(ack, refusal("too_fast", "You are writing too fast. Wait a moment."));
+      socket.to(key(String(room))).emit("mls:request", { room: String(room), from: { id: user.id, nickname: user.nickname }, keyPackage, proof });
+      reply(ack, { ok: true });
+    });
+
+    // A member changes the group (lets somebody in, takes somebody out). A change is made on an epoch; only the first one made on it is kept.
+    socket.on("mls:commit", async (data, ack) => {
+      const { room, base, commit, welcome, to } = payload(data);
+      const user = await inRoom(room);
+      if (!user) return refuse(ack, joinFirst);
+      if (!Number.isInteger(base) || base < 0 || !isMlsText(commit) || (welcome !== undefined && !isMlsText(welcome))) return refuse(ack, refusal("bad_mls"));
+      if (welcome !== undefined && !(typeof to === "string" && (await registry.isIn(to, String(room))))) return refuse(ack, refusal("unknown_target"));
+      if (!small.allow()) return refuse(ack, refusal("too_fast", "You are writing too fast. Wait a moment."));
+      const advanced = await registry.advanceEpoch(socket.id, String(room), base);
+      if (advanced.error) return reply(ack, { error: advanced.error, code: advanced.code, params: advanced.params, epoch: advanced.epoch });
+      socket.to(key(String(room))).emit("mls:commit", { room: String(room), epoch: advanced.epoch, commit, from: { id: user.id, nickname: user.nickname } });
+      if (welcome !== undefined) io.to(to).emit("mls:welcome", { room: String(room), epoch: advanced.epoch, welcome });
+      reply(ack, { ok: true, epoch: advanced.epoch });
     });
 
     // ---- messages
@@ -220,7 +262,7 @@ export function createChatServer({
       const sized = classifyBody(body, { textOnly: true });
       if (sized.error) return refuse(ack, sized);
       if (!texts.allow()) return refuse(ack, refusal("too_fast", "You are writing too fast. Wait a moment."));
-      io.to(key(String(room))).emit("message:edited", { room: String(room), id, body, from: { nickname: user.nickname }, at: new Date().toISOString() });
+      io.to(key(String(room))).emit("message:edited", { room: String(room), id, body, from: { id: user.id, nickname: user.nickname }, at: new Date().toISOString() });
       reply(ack, { ok: true });
     });
 

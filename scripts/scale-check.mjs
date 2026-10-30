@@ -1,6 +1,7 @@
 // Checks a running cluster from the outside (docker compose -f docker-compose.scale.yaml up): people who land on different
 // servers must still find each other, share rooms and see the same counts.
 //   node scripts/scale-check.mjs [http://localhost:8080]
+import { createHash } from "node:crypto";
 import { io } from "socket.io-client";
 
 const url = process.argv[2] || "http://localhost:8080";
@@ -42,9 +43,10 @@ await new Promise((r) => dup.on("connect", r));
 check("a nickname is unique across servers", (await ask(dup, "hello", { nickname: ada.nickname.toUpperCase() })).code === "nickname_taken");
 dup.close();
 
-const room = (await ask(ada.socket, "room:create", { name: `Cluster ${suffix}` })).room;
-const joined = await ask(bob.socket, "room:join", { code: room.code });
-check("somebody on the other server joins with the code", joined.ok === true, JSON.stringify(joined));
+const handle = createHash("sha256").update(`scale-check ${suffix}`).digest("hex"); // the servers only see the handle of a code
+const room = (await ask(ada.socket, "room:create", { name: `Cluster ${suffix}`, handle })).room;
+const joined = await ask(bob.socket, "room:join", { handle });
+check("somebody on the other server joins with the handle", joined.ok === true, JSON.stringify(joined));
 
 const heard = [];
 bob.socket.on("message", (m) => heard.push(m.body));

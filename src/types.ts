@@ -1,10 +1,9 @@
 import type { Key } from './i18n'
 
-/** A room you are in. Its code is what lets somebody else in. */
+/** A room you are in, as the server describes it. The server does not know its code: only a hash of it. */
 export interface Room {
   id: string
   name: string
-  code: string
   members: number
   locked: boolean
   ownerId: string | null
@@ -48,7 +47,8 @@ export type Line = { kind: 'message'; msg: Msg } | { kind: 'event'; id: string; 
 /** Everything about a room the person is in. It lives in memory only: leaving the room forgets it. */
 export interface JoinedRoom {
   room: Room
-  key: CryptoKey
+  /** the code of the room, as the people in it know it: it lets somebody else in */
+  code: string
   lines: Line[]
   members: Member[]
   typing: string[]
